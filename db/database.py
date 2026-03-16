@@ -53,6 +53,13 @@ def toggle_favorite(item_id, status):
     conn.commit()
     conn.close()
 
+def delete_item(item_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM clipboard_items WHERE id=?", (item_id,))
+    conn.commit()
+    conn.close()
+
 
 def get_recent_items(limit=20):
     conn = get_connection()
