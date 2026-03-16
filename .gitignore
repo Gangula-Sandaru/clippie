@@ -16,6 +16,7 @@ build/
 # .idea
 .idea/
 
+db/clipboard.db
 
 
 
