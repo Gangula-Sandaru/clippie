@@ -1,50 +1,67 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QHBoxLayout, QFrame
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QHBoxLayout, QFrame, \
+    QGraphicsOpacityEffect
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFontMetrics, QColor
-from db.database import get_recent_items, get_time_ago  # Ensure get_time_ago is in your db file
+from PyQt5.QtGui import QFontMetrics
+from db.database import get_recent_items, get_time_ago
 import pyperclip
 
 
 class ClipboardItemWidget(QFrame):
-    def __init__(self, content, category="Text", time_ago="Just now", is_favorite=0):
+    def __init__(self, content, category="Text", time_ago="Just now"):
         super().__init__()
         self.setObjectName("ItemCard")
         self.raw_content = content
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 12, 15, 12)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
 
-        # Header: Tag, Favorite Star, and Time
         header_layout = QHBoxLayout()
 
+        # 1. Tag
         self.tag_label = QLabel(category.upper())
         self.tag_label.setObjectName(f"Tag{category}")
 
-        # Show a star if it's a favorite
-        self.fav_label = QLabel("⭐" if is_favorite else "")
-        self.fav_label.setStyleSheet("font-size: 10px;")
+        # 2. Time
+        self.time_label = QLabel(time_ago)
+        self.time_label.setObjectName("TimeLabel")
 
-        time_label = QLabel(time_ago)
-        time_label.setObjectName("TimeLabel")
+        # 3. Copy Icon (The 'Double Box' ❐)
+        self.copy_icon = QLabel("❐")
+        self.copy_icon.setObjectName("CopyIcon")
+        self.copy_icon.setFixedWidth(20)
+        self.copy_icon.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        # --- OPACITY FIX ---
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.opacity_effect.setOpacity(0.0)  # Hidden by default
+        self.copy_icon.setGraphicsEffect(self.opacity_effect)
 
         header_layout.addWidget(self.tag_label)
-        header_layout.addWidget(self.fav_label)  # Added favorite indicator
+        header_layout.addSpacing(10)
+        header_layout.addWidget(self.time_label)
         header_layout.addStretch()
-        header_layout.addWidget(time_label)
+        header_layout.addWidget(self.copy_icon)
 
-        # Content: Single line with "..."
+        # 4. Content (Single line)
         self.content_label = QLabel()
         self.content_label.setObjectName("ContentLabel")
 
         layout.addLayout(header_layout)
         layout.addWidget(self.content_label)
 
+    def enterEvent(self, event):
+        self.opacity_effect.setOpacity(1.0)  # Show on hover
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.opacity_effect.setOpacity(0.0)  # Hide on leave
+        super().leaveEvent(event)
+
     def paintEvent(self, event):
         metrics = QFontMetrics(self.content_label.font())
         display_text = self.raw_content.replace('\n', ' ').strip()
-        # Adjusted width to account for the new star label
-        elided = metrics.elidedText(display_text, Qt.ElideRight, self.width() - 40)
+        elided = metrics.elidedText(display_text, Qt.ElideRight, self.width() - 50)
         self.content_label.setText(elided)
         super().paintEvent(event)
 
@@ -84,65 +101,37 @@ class MainWindow(QWidget):
         self.load_items()
 
     def load_items(self):
-        """Updated to pull real data from the database columns"""
         self.list_widget.clear()
-
-        # New DB returns: (id, content, tag, is_favorite, timestamp)
-        items = get_recent_items(limit=15)
-
+        items = get_recent_items()
         for item in items:
-            db_id = item[0]
-            content = item[1]
-            tag = item[2]
-            is_fav = item[3]
-            raw_time = item[4]
-
-            # Use the helper function from your database file to get "5m ago"
-            time_str = get_time_ago(raw_time)
-
-            custom_widget = ClipboardItemWidget(
-                content=content,
-                category=tag,
-                time_ago=time_str,
-                is_favorite=is_fav
-            )
-
-            list_item = QListWidgetItem(self.list_widget)
-            list_item.setSizeHint(custom_widget.sizeHint())
-
-            self.list_widget.addItem(list_item)
-            self.list_widget.setItemWidget(list_item, custom_widget)
+            cw = ClipboardItemWidget(item[1], item[2], get_time_ago(item[4]))
+            li = QListWidgetItem(self.list_widget)
+            li.setSizeHint(cw.sizeHint())
+            self.list_widget.addItem(li)
+            self.list_widget.setItemWidget(li, cw)
 
     def copy_selection(self, item):
         widget = self.list_widget.itemWidget(item)
         pyperclip.copy(widget.raw_content)
-
-        header_lbl = self.findChild(QLabel, "MainHeader")
-        header_lbl.setText("✅ Copied!")
-        header_lbl.setStyleSheet("color: #7aa2f7;")  # Briefly turn blue
-
-        QTimer.singleShot(1000, lambda: self.reset_header())
-
-    def reset_header(self):
-        header_lbl = self.findChild(QLabel, "MainHeader")
-        header_lbl.setText("🕒 Recent Copies")
-        header_lbl.setStyleSheet("color: white;")
+        h = self.findChild(QLabel, "MainHeader")
+        h.setText("✅ Copied!")
+        h.setStyleSheet("color: #7aa2f7;")
+        QTimer.singleShot(1000, lambda: (h.setText("🕒 Recent Copies"), h.setStyleSheet("color: white;")))
 
     def apply_styles(self):
-        # (Styles remain largely the same, optimized for OLED black)
         self.setStyleSheet("""
-            #Container { background-color: #000000; border-radius: 20px; border: 1px solid #222222; }
+            #Container { background-color: #0b0e14; border-radius: 18px; border: 1px solid #1a1f26; }
             #MainHeader { color: #ffffff; font-size: 15px; font-weight: 700; padding: 5px; }
-            #HistoryList { background-color: transparent; border: none; outline: none; }
-            #HistoryList::item { background-color: transparent; border: none; }
-            #ItemCard { background-color: #0d0d0d; border-radius: 12px; border: 1px solid #1f1f1f; }
-            #ItemCard:hover { background-color: #161616; border: 1px solid #333333; }
-            #ContentLabel { color: #eeeeee; font-size: 13px; font-weight: 400; }
-            #TimeLabel { color: #555555; font-size: 11px; }
+            #HistoryList { background: transparent; border: none; outline: none; }
+            #ItemCard { background-color: #141923; border-radius: 12px; border: 1px solid #1f2631; }
+            #ItemCard:hover { background-color: #1c2331; border: 1px solid #2d384d; }
+            #CopyIcon { color: #7aa2f7; font-size: 14px; font-weight: bold; }
+            #ContentLabel { color: #ffffff; font-size: 13px; font-weight: 600; }
+            #TimeLabel { color: #565f89; font-size: 11px; }
             #TagCode { background-color: #311b47; color: #bb9af7; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }
             #TagURL { background-color: #1a273e; color: #7aa2f7; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }
-            #TagText { background-color: #222222; color: #999999; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }
-            #FooterLink { color: #3d59a1; font-size: 13px; font-weight: 600; padding-top: 15px; border-top: 1px solid #1a1a1a; }
+            #TagText { background-color: #222a39; color: #99a3ba; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }
+            #FooterLink { color: #3d59a1; font-size: 13px; font-weight: 600; padding: 10px; border-top: 1px solid #1a1f26; }
             QScrollBar:vertical { border: none; background: transparent; width: 4px; }
-            QScrollBar::handle:vertical { background: #333333; border-radius: 2px; }
+            QScrollBar::handle:vertical { background: #2d384d; border-radius: 2px; }
         """)
