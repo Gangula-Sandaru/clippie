@@ -1,180 +1,242 @@
 import sys
-import pyperclip
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QFrame, QApplication
-from PyQt5.QtCore import Qt, QTimer
-from db.database import get_recent_items, get_time_ago
-from ui.main_card import ClipboardItemWidget
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QListWidget,
+                             QListWidgetItem, QFrame, QHBoxLayout, QGraphicsDropShadowEffect, QPushButton)
+from PyQt5.QtCore import Qt, QPropertyAnimation, QEasingCurve, QPoint
+from PyQt5.QtGui import QColor
+from themes.theme_manager import theme_engine
 
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        # Compact Window Config
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        # Window Setup
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(340, 500)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
 
+        # Reduced width for a thinner, modern look
+        self.win_w, self.win_h = 340, 580
+        self.setFixedSize(self.win_w, self.win_h)
         self.dashboard_win = None
+        self.is_locked = False
+        self._is_hiding = False
 
-        # Container
+        # --- MAIN CONTAINER ---
         self.container = QFrame(self)
         self.container.setObjectName("Container")
-        self.container.setFixedSize(340, 500)
+        self.container.setFixedSize(self.win_w, self.win_h)
 
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(25)
+        shadow.setXOffset(0)
+        shadow.setYOffset(8)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        self.container.setGraphicsEffect(shadow)
+
+        # --- LAYOUT ---
         self.main_layout = QVBoxLayout(self.container)
-        self.main_layout.setContentsMargins(20, 20, 20, 15)
+        # Left: 15 (Thin side), Top: 25, Right: 5 (Scrollbar lane), Bottom: 15
+        self.main_layout.setContentsMargins(15, 25, 5, 15)
         self.main_layout.setSpacing(12)
 
-        # Header
-        self.header = QLabel("🕒 Recent")
+        # --- HEADER ---
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(5, 0, 15, 0)
+        self.header = QLabel("Recent Clips")
         self.header.setObjectName("MainHeader")
-        self.main_layout.addWidget(self.header)
 
-        # List
+        self.btn_lock = QPushButton("🔓")
+        self.btn_lock.setObjectName("LockBtn")
+        self.btn_lock.setFixedSize(24, 24)
+        self.btn_lock.setCursor(Qt.PointingHandCursor)
+        self.btn_lock.setCheckable(True)
+        self.btn_lock.clicked.connect(self.toggle_lock)
+
+        self.status_dot = QFrame()
+        self.status_dot.setFixedSize(8, 8)
+        self.status_dot.setObjectName("StatusDot")
+        header_layout.addWidget(self.header)
+        header_layout.addStretch()
+        header_layout.addWidget(self.btn_lock)
+        header_layout.addWidget(self.status_dot)
+        self.main_layout.addLayout(header_layout)
+        self.header.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        # --- THE LIST ---
         self.list_widget = QListWidget()
         self.list_widget.setObjectName("HistoryList")
+        self.list_widget.setSelectionMode(QListWidget.NoSelection)
+        self.list_widget.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        self.list_widget.setFocusPolicy(Qt.NoFocus)
         self.list_widget.setSpacing(8)
-        self.list_widget.itemClicked.connect(self.copy_selection)
+        self.list_widget.setFrameShape(QFrame.NoFrame)
+        self.list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.main_layout.addWidget(self.list_widget)
 
-        # Footer
-        self.footer = QLabel("View All History →")
+        # --- FOOTER ---
+        self.footer = QLabel("View all →")
         self.footer.setAlignment(Qt.AlignCenter)
         self.footer.setObjectName("FooterLink")
+        self.footer.setFixedHeight(45)
         self.footer.setCursor(Qt.PointingHandCursor)
         self.footer.mousePressEvent = self.open_dashboard
         self.main_layout.addWidget(self.footer)
 
-        self.apply_styles()
+        theme_engine.theme_changed.connect(self.apply_styles)
+        self.apply_styles(theme_engine.current_palette)
+
+    def toggle_lock(self):
+        if self.btn_lock.isChecked():
+            self.btn_lock.setText("🔒")
+            self.is_locked = True
+        else:
+            self.btn_lock.setText("🔓")
+            self.is_locked = False
+
+    def apply_styles(self, p):
+        self.setStyleSheet(f"""
+            #Container {{ 
+                background-color: {p['main_bg']}; 
+                border-radius: 28px; 
+                border: 1px solid {p['card_border']}; 
+            }}
+            #MainHeader {{ 
+                color: {p['text_main']}; 
+                font-size: 19px; 
+                font-weight: 800; 
+                letter-spacing: -0.4px;
+            }}
+            #StatusDot {{ background-color: {p['accent']}; border-radius: 4px; }}
+
+            #LockBtn {{
+                background: transparent;
+                border: none;
+                color: {p['text_dim']};
+                font-size: 14px;
+            }}
+            #LockBtn:hover {{
+                color: {p['accent']};
+            }}
+            #LockBtn:checked {{
+                color: {p['accent']};
+            }}
+
+            #HistoryList {{ 
+                background: transparent; 
+                border: none;
+                outline: none;
+                padding-right: 12px; 
+            }}
+
+            #FooterLink {{ 
+                background-color: {p['widget_bg']};
+                color: {p['accent']}; 
+                font-size: 13px;
+                font-weight: 700; 
+                border-radius: 12px;
+                margin-right: 10px;
+            }}
+
+            /* --- CLEAN SCROLLBAR (No white lines) --- */
+            #HistoryList QScrollBar:vertical {{ 
+                background: transparent; 
+                width: 4px; 
+                margin: 0px;
+            }}
+
+            #HistoryList QScrollBar::handle:vertical {{ 
+                background: {p['card_border']}; 
+                border-radius: 2px; 
+                min-height: 40px;
+            }}
+
+            #HistoryList QScrollBar::handle:vertical:hover {{ 
+                background: {p['accent']}; 
+            }}
+
+            /* This removes the 'white line' or background track */
+            #HistoryList QScrollBar::add-line:vertical, 
+            #HistoryList QScrollBar::sub-line:vertical,
+            #HistoryList QScrollBar::add-page:vertical, 
+            #HistoryList QScrollBar::sub-page:vertical {{
+                background: none;
+                border: none;
+                height: 0px;
+            }}
+        """)
         self.load_items()
 
     def load_items(self):
         self.list_widget.clear()
+        from db.database import get_recent_items, get_time_ago
+        from ui.main_card import ClipboardItemWidget
         items = get_recent_items()
+        p = theme_engine.current_palette
+
         for item in items:
-            cw = ClipboardItemWidget(item[1], item[2], get_time_ago(item[4]))
+            cw = ClipboardItemWidget(item[1], item[2], get_time_ago(item[4]), p)
+
+            # Subtraction is key: List width - (Right Padding + Margin Buffer)
+            cw.setFixedWidth(self.list_widget.width() - 28)
+
             li = QListWidgetItem(self.list_widget)
             li.setSizeHint(cw.sizeHint())
             self.list_widget.addItem(li)
             self.list_widget.setItemWidget(li, cw)
 
-    def copy_selection(self, item):
-        widget = self.list_widget.itemWidget(item)
-        pyperclip.copy(widget.raw_content)
-        self.header.setText("✅ Copied!")
-        self.header.setStyleSheet("color: #9ece6a;")
-        QTimer.singleShot(1000, lambda: (
-            self.header.setText("🕒 Recent"),
-            self.header.setStyleSheet("color: #ffffff;")
-        ))
-
     def open_dashboard(self, event):
+        if event.button() == Qt.LeftButton:
+            self.hide()
+            if self.dashboard_win is None:
+                from ui.dashboard_window import HistoryWindow
+                self.dashboard_win = HistoryWindow(parent_window=self)
+            self.dashboard_win.show()
+
+    def smooth_show(self, target_pos):
+        if getattr(self, '_is_hiding', False) and hasattr(self, 'anim_fade'):
+            self.anim_fade.stop()
+        self._is_hiding = False
+        
+        self.setWindowOpacity(0.0)
+        self.show() # Triggers showEvent to load items immediately
+        
+        # Slide offset 
+        offset = -40 if target_pos.x() > self.pos().x() else 40
+        start_x = target_pos.x() + offset
+        self.move(start_x, target_pos.y())
+
+        self.anim_fade = QPropertyAnimation(self, b"windowOpacity")
+        self.anim_fade.setDuration(250)
+        self.anim_fade.setStartValue(0.0)
+        self.anim_fade.setEndValue(1.0)
+        self.anim_fade.setEasingCurve(QEasingCurve.OutQuad)
+        self.anim_fade.start()
+
+        self.anim_slide = QPropertyAnimation(self, b"pos")
+        self.anim_slide.setDuration(400)
+        self.anim_slide.setStartValue(QPoint(start_x, target_pos.y()))
+        self.anim_slide.setEndValue(target_pos)
+        self.anim_slide.setEasingCurve(QEasingCurve.OutBack)
+        self.anim_slide.start()
+
+    def smooth_hide(self):
+        if getattr(self, '_is_hiding', False) or not self.isVisible():
+            return
+        self._is_hiding = True
+        
+        self.anim_fade = QPropertyAnimation(self, b"windowOpacity")
+        self.anim_fade.setDuration(200)
+        self.anim_fade.setStartValue(self.windowOpacity())
+        self.anim_fade.setEndValue(0.0)
+        self.anim_fade.setEasingCurve(QEasingCurve.OutQuad)
+        self.anim_fade.finished.connect(self._finish_hide)
+        self.anim_fade.start()
+        
+    def _finish_hide(self):
         self.hide()
-        QApplication.processEvents()
-        if self.dashboard_win is None:
-            from ui.dashboard_window import HistoryWindow
-            self.dashboard_win = HistoryWindow(parent_window=self)
-        self.dashboard_win.show()
+        self._is_hiding = False
+        self.setWindowOpacity(1.0)
 
-
-    def apply_styles(self):
-        self.setStyleSheet("""
-            #Container { 
-                background-color: #0b0e14; 
-                border-radius: 24px; 
-                border: 1px solid #1f2631; 
-            }
-
-            #MainHeader { 
-                color: #ffffff; 
-                font-size: 17px; 
-                font-weight: 800; 
-                padding-left: 5px; 
-            }
-
-            #HistoryList { 
-                background: transparent; 
-                border: none; 
-                outline: none; 
-            }
-
-            /* Item Cards Style */
-            #ItemCard { 
-                background-color: #161b22; 
-                border-radius: 16px; 
-                border: 1px solid #1f2631; 
-            }
-            #ItemCard:hover { 
-                background-color: #1f2335; 
-                border: 1px solid #3d59a1; 
-            }
-
-            #ContentLabel { 
-                color: #c0caf5; 
-                font-size: 14px; 
-                font-weight: 500; 
-            }
-
-            #TimeLabel { 
-                color: #565f89; 
-                font-size: 11px; 
-                font-weight: 600; 
-            }
-
-            #CopyIcon { 
-                color: #7aa2f7; 
-                font-size: 16px; 
-            }
-
-            /* Category Chips */
-            #TagTEXT, #TagURL, #TagCODE { 
-                font-size: 10px; 
-                font-weight: 800; 
-                border-radius: 6px; 
-                padding: 3px 8px; 
-            }
-            #TagTEXT { background-color: #222a39; color: #9aa3ce; }
-            #TagURL { background-color: rgba(122, 162, 247, 0.15); color: #7aa2f7; }
-            #TagCODE { background-color: rgba(187, 154, 247, 0.15); color: #bb9af7; }
-
-            /* Footer Styles */
-            #FooterLink { 
-                color: #3d59a1; 
-                font-size: 14px; 
-                font-weight: 700; 
-                padding: 12px; 
-                border-top: 1px solid #1f2631;
-                margin-top: 5px;
-            }
-            #FooterLink:hover { 
-                color: #7aa2f7; 
-                background-color: rgba(122, 162, 247, 0.05);
-                border-radius: 12px;
-            }
-
-            /* Tooltip Style */
-            QToolTip {
-                background-color: #1a1b26;
-                color: #c0caf5;
-                border: 1px solid #3d59a1;
-                padding: 6px;
-                border-radius: 6px;
-                font-size: 12px;
-            }
-
-            /* Scrollbar Style */
-            QScrollBar:vertical { 
-                border: none; 
-                background: transparent; 
-                width: 6px; 
-            }
-            QScrollBar::handle:vertical { 
-                background: #24283b; 
-                border-radius: 3px; 
-            }
-            QScrollBar::handle:vertical:hover { 
-                background: #3d59a1; 
-            }
-        """)
-
-
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.load_items()
