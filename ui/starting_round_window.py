@@ -1,20 +1,7 @@
 from PyQt5.QtWidgets import QWidget, QLabel, QApplication, QGraphicsDropShadowEffect, QGraphicsOpacityEffect
 from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty
 from PyQt5.QtGui import QColor, QPainter, QPen
-import keyboard
-
-
-def is_activation_key_pressed():
-    """Checks if Alt is pressed alone without common combo keys"""
-    if not keyboard.is_pressed('alt'):
-        return False
-
-    # Prevent activation during Alt+Tab, Alt+F4, etc.
-    forbidden_combos = ['tab', 'f4', 'shift', 'ctrl', 'space']
-    if any(keyboard.is_pressed(k) for k in forbidden_combos):
-        return False
-
-    return True
+from utils.helpers import is_activation_key_pressed
 
 
 class RoundIconLabel(QLabel):
@@ -53,8 +40,9 @@ class FloatingButton(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFixedSize(90, 90)
 
         self.icon_label = RoundIconLabel(self)
@@ -91,8 +79,13 @@ class FloatingButton(QWidget):
             self.anim_fade.start()
 
         if self.main_window.isVisible():
-            if not self.underMouse() and not self.main_window.underMouse():
-                self.main_window.hide()
+            if getattr(self.main_window, 'is_locked', False):
+                pass  # Do not hide if it's explicitly locked open
+            elif not self.underMouse() and not self.main_window.underMouse():
+                if hasattr(self.main_window, 'smooth_hide'):
+                    self.main_window.smooth_hide()
+                else:
+                    self.main_window.hide()
                 self.anim_rot.stop()
                 self.anim_rot.setEndValue(0)
                 self.anim_rot.start()
@@ -112,8 +105,12 @@ class FloatingButton(QWidget):
             else:
                 target_x = self.x() - self.main_window.width() - 5
 
-            self.main_window.move(target_x, self.y())
-            self.main_window.show()
+            from PyQt5.QtCore import QPoint
+            if hasattr(self.main_window, 'smooth_show'):
+                self.main_window.smooth_show(QPoint(target_x, self.y()))
+            else:
+                self.main_window.move(target_x, self.y())
+                self.main_window.show()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton: self.dragPos = event.globalPos()
