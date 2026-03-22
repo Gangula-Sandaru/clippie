@@ -1,0 +1,6 @@
+{
+    "theme": "Dark OLED",
+    "history_limit": "50 Records",
+    "startup": false,
+    "hotkey": "alt"
+}
