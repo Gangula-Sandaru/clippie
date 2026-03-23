@@ -40,6 +40,7 @@ class RoundIconLabel(QLabel):
 
 class FloatingButton(QWidget):
     double_ctrl_signal = pyqtSignal()
+    esc_signal = pyqtSignal()
 
     def __init__(self, main_window):
         super().__init__()
@@ -52,7 +53,9 @@ class FloatingButton(QWidget):
         self.last_ctrl_time = 0
         self.opened_via_hotkey = False
         keyboard.on_release_key("ctrl", self.on_ctrl_release)
+        keyboard.on_release_key("esc", self.on_esc_release)
         self.double_ctrl_signal.connect(self.toggle_main_window_from_hotkey)
+        self.esc_signal.connect(self.hide_main_window_from_esc)
 
         self.icon_label = RoundIconLabel(self)
         self.icon_label.setFixedSize(60, 60)
@@ -72,6 +75,20 @@ class FloatingButton(QWidget):
         self.monitor_timer = QTimer()
         self.monitor_timer.timeout.connect(self.update_state)
         self.monitor_timer.start(100)
+
+    def on_esc_release(self, e):
+        self.esc_signal.emit()
+
+    def hide_main_window_from_esc(self):
+        if self.main_window.isVisible() and not getattr(self.main_window, '_is_hiding', False):
+            self.opened_via_hotkey = False
+            if hasattr(self.main_window, 'smooth_hide'):
+                self.main_window.smooth_hide()
+            else:
+                self.main_window.hide()
+            self.anim_rot.stop()
+            self.anim_rot.setEndValue(0)
+            self.anim_rot.start()
 
     def on_ctrl_release(self, e):
         current_time = time.time()
