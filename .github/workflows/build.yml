@@ -8,13 +8,16 @@ jobs:
   build:
     runs-on: windows-latest
 
-    # Set environment variables at the job level (applies to all steps)
+    # Force Node.js 24 for all actions in this job
+    defaults:
+      run:
+        shell: pwsh
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       PYTHON_VERSION: '3.11'
 
     steps:
-      # 1. Checkout code
+      # 1. Checkout code (with Node 24 forced)
       - name: Checkout code
         uses: actions/checkout@v3
 
@@ -24,8 +27,8 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # 3. Install Python dependencies
-      - name: Install dependencies
+      # 3. Install dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -39,22 +42,16 @@ jobs:
 
       # 5. Install Inno Setup silently
       - name: Install Inno Setup
-        shell: powershell
         run: |
           Invoke-WebRequest "https://jrsoftware.org/download.php/is6install.exe" -OutFile "is6install.exe"
           Start-Process -FilePath "is6install.exe" -ArgumentList "/VERYSILENT /NORESTART /SP-" -Wait
 
-      # 6. Build Installer with Inno Setup
-      - name: Build Installer with Inno Setup
-        shell: powershell
+      # 6. Build installer with Inno Setup
+      - name: Build Installer
         run: |
           $sha = git rev-parse --short HEAD
           $installerName = "ClippieInstaller-$sha.exe"
-          
-          # Update the output filename in .iss
           (Get-Content Clippie.iss) -replace "OutputFileName=.*", "OutputFileName=Output\\$installerName" | Set-Content Clippie.iss
-
-          # Build installer
           "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Clippie.iss
           echo "Installer built: Output\$installerName"
 
