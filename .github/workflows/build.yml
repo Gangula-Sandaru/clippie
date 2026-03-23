@@ -2,24 +2,23 @@ name: Build Clippie EXE
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
 
 jobs:
   build:
     runs-on: windows-latest
     
-    # 🛠️ THIS FIXES THE DEPRECATION WARNING
+    # 🛠️ This forces the runner to use Node 24 for all steps
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Ensure this is v4
+        uses: actions/checkout@v4.2.2 # Explicit latest version
 
       - name: Setup Python
-        uses: actions/setup-python@v5 # Ensure this is v5
+        uses: actions/setup-python@v5.3.0 # Explicit latest version
         with:
           python-version: '3.10'
 
@@ -29,15 +28,17 @@ jobs:
           pip install pyinstaller PyQt5 pyperclip
 
       - name: Build EXE with PyInstaller
+        # Added your data folders to ensure the EXE actually runs!
         run: |
           pyinstaller --noconfirm --onedir --windowed --name "Clippie" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" main.py
 
       - name: Create Installer
+        shell: cmd
         run: |
           iscc clippie.iss
 
       - name: Upload Installer
-        uses: actions/upload-artifact@v4 # Ensure this is v4
+        uses: actions/upload-artifact@v4.4.0 # Explicit latest version
         with:
           name: Clippie-Installation-Package
           path: Output/*.exe
