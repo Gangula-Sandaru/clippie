@@ -10,50 +10,40 @@ jobs:
   build:
     runs-on: windows-latest
 
-    env:
-      # Force Node.js 24 for all actions
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
     steps:
-      # 1️⃣ Checkout your repository
+      # 1. Checkout repository (Updated to v4)
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2️⃣ Set up Python
+      # 2. Set up Python (Updated to v5)
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.11  # or your version
+          python-version: '3.10' # Matches your local 3.10.dll version
 
-      # 3️⃣ Install dependencies
+      # 3. Install dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pyinstaller PyQt5 pyperclip # Add all your project libraries here
 
-      # 4️⃣ Build .exe using PyInstaller
+      # 4. Build .exe using PyInstaller
+      # Note: Make sure to include your --add-data flags so themes/ui folders are included!
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --noconfirm --onefile --windowed main.py
-          # Replace main.py with your entry point
+          pyinstaller --noconfirm --onedir --windowed --name "Clippie" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" main.py
 
-      # 5️⃣ Optional: Install Inno Setup
-      - name: Install Inno Setup
-        uses: jupytercaleb/innosetup-action@v1.0.1
-        with:
-          version: 6.2.0  # latest stable
-
-      # 6️⃣ Optional: Package EXE using Inno Setup
+      # 5. Create Installer using Inno Setup
+      # We use 'iscc' directly because it is already installed on Windows Runners
       - name: Create Installer
         run: |
-          iscc installer.iss
-          # Make sure installer.iss points to your EXE built above
+          iscc clippie.iss 
+        # Ensure 'clippie.iss' is in your GitHub root folder
 
-      # 7️⃣ Upload the EXE/Installer as an artifact
-      - name: Upload EXE
-        uses: actions/upload-artifact@v3
+      # 6. Upload the Installer as an artifact (Updated to v4)
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
         with:
-          name: Clippie-Build
-          path: |
-            dist/*.exe
-            # or path/to/installer/setup.exe
+          name: Clippie-Installation-Package
+          path: Output/*.exe 
+          # Inno Setup usually puts the result in an 'Output' folder
