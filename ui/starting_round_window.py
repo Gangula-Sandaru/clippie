@@ -1,7 +1,9 @@
 from PyQt5.QtWidgets import QWidget, QLabel, QApplication, QGraphicsDropShadowEffect, QGraphicsOpacityEffect
-from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from utils.helpers import is_activation_key_pressed
+import keyboard
+import time
 
 
 class RoundIconLabel(QLabel):
@@ -37,6 +39,8 @@ class RoundIconLabel(QLabel):
 
 
 class FloatingButton(QWidget):
+    double_ctrl_signal = pyqtSignal()
+
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
@@ -44,6 +48,11 @@ class FloatingButton(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFixedSize(90, 90)
+
+        self.last_ctrl_time = 0
+        self.opened_via_hotkey = False
+        keyboard.on_release_key("ctrl", self.on_ctrl_release)
+        self.double_ctrl_signal.connect(self.toggle_main_window_from_hotkey)
 
         self.icon_label = RoundIconLabel(self)
         self.icon_label.setFixedSize(60, 60)
@@ -64,6 +73,45 @@ class FloatingButton(QWidget):
         self.monitor_timer.timeout.connect(self.update_state)
         self.monitor_timer.start(100)
 
+    def on_ctrl_release(self, e):
+        current_time = time.time()
+        if current_time - self.last_ctrl_time < 0.3:
+            self.last_ctrl_time = 0
+            self.double_ctrl_signal.emit()
+        else:
+            self.last_ctrl_time = current_time
+
+    def toggle_main_window_from_hotkey(self):
+        if self.main_window.isVisible() and not getattr(self.main_window, '_is_hiding', False):
+            self.opened_via_hotkey = False
+            if hasattr(self.main_window, 'smooth_hide'):
+                self.main_window.smooth_hide()
+            else:
+                self.main_window.hide()
+            self.anim_rot.stop()
+            self.anim_rot.setEndValue(0)
+            self.anim_rot.start()
+        else:
+            self.opened_via_hotkey = True
+            self.anim_rot.stop()
+            self.anim_rot.setEndValue(5)
+            self.anim_rot.start()
+
+            self.main_window.load_items()
+            screen = QApplication.primaryScreen().availableGeometry()
+
+            if self.x() + self.width() + self.main_window.width() + 10 <= screen.right():
+                target_x = self.x() + self.width() + 5
+            else:
+                target_x = self.x() - self.main_window.width() - 5
+
+            from PyQt5.QtCore import QPoint
+            if hasattr(self.main_window, 'smooth_show'):
+                self.main_window.smooth_show(QPoint(target_x, self.y()))
+            else:
+                self.main_window.move(target_x, self.y())
+                self.main_window.show()
+
     def update_state(self):
         # Strict check: Alt must be alone
         is_pressed_alone = is_activation_key_pressed()
@@ -79,8 +127,8 @@ class FloatingButton(QWidget):
             self.anim_fade.start()
 
         if self.main_window.isVisible():
-            if getattr(self.main_window, 'is_locked', False):
-                pass  # Do not hide if it's explicitly locked open
+            if getattr(self.main_window, 'is_locked', False) or getattr(self, 'opened_via_hotkey', False):
+                pass  # Do not hide if it's explicitly locked open or hotkey toggled
             elif not self.underMouse() and not self.main_window.underMouse():
                 if hasattr(self.main_window, 'smooth_hide'):
                     self.main_window.smooth_hide()
