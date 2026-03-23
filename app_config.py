@@ -24,7 +24,8 @@ class ConfigManager:
             "theme": "Dark OLED",
             "history_limit": "100 Records",
             "startup": True,
-            "hotkey": "alt"
+            "hotkey": "alt",
+            "first_run": True
         }
         self.settings = self.load_settings()
 

@@ -51,4 +51,9 @@ if __name__ == "__main__":
     floater = FloatingButton(main_win)
     floater.show()
 
+    if config.settings.get("first_run", True):
+        from ui.onboarding_window import OnboardingWindow
+        onboarding = OnboardingWindow()
+        onboarding.exec_()
+
     sys.exit(app.exec_())
