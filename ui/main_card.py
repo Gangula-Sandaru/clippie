@@ -9,20 +9,17 @@ class ClipboardItemWidget(QFrame):
         super().__init__()
         self.setObjectName("ItemCard")
 
-        # --- CRITICAL: Remove selection/focus behavior ---
         self.setFocusPolicy(Qt.NoFocus)
-        self.setAttribute(Qt.WA_Hover)  # Ensures smooth hover event delivery
+        self.setAttribute(Qt.WA_Hover)
 
         self.raw_content = content
         self.category = category.upper() if category else "TEXT"
         self.palette = p
 
-        # --- Layout ---
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 20, 22, 20)
         layout.setSpacing(14)
 
-        # --- Header ---
         header = QHBoxLayout()
         header.setAlignment(Qt.AlignVCenter)
 
@@ -42,7 +39,7 @@ class ClipboardItemWidget(QFrame):
         self.copy_btn.setFixedSize(32, 32)
         self.copy_btn.setCursor(Qt.PointingHandCursor)
         self.copy_btn.setObjectName("ActionBtn")
-        self.copy_btn.setFocusPolicy(Qt.NoFocus)  # Hide button focus too
+        self.copy_btn.setFocusPolicy(Qt.NoFocus)
         self.copy_btn.clicked.connect(self.copy_to_clipboard)
 
         actions_layout.addWidget(self.copy_btn)
@@ -53,7 +50,6 @@ class ClipboardItemWidget(QFrame):
         header.addStretch()
         header.addWidget(self.actions_container)
 
-        # --- Body ---
         self.content_label = QLabel()
         self.content_label.setObjectName("ContentLabel")
 
@@ -64,7 +60,7 @@ class ClipboardItemWidget(QFrame):
                 self.content_label.setPixmap(pixmap.scaled(300, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             else:
                 self.content_label.setText("Image not found")
-        
+
         layout.addLayout(header)
         layout.addWidget(self.content_label)
 
@@ -83,10 +79,10 @@ class ClipboardItemWidget(QFrame):
         if self.category == "IMAGE":
             from PyQt5.QtWidgets import QApplication
             from PyQt5.QtGui import QImage, QClipboard
+            from PyQt5.QtCore import QUrl, QMimeData, QCoreApplication
             import hashlib
             from PIL import Image
-            
-            # Pre-calculate hash
+
             try:
                 pil_img = Image.open(self.raw_content)
                 if pil_img.mode != 'RGB': pil_img = pil_img.convert('RGB')
@@ -94,37 +90,44 @@ class ClipboardItemWidget(QFrame):
             except Exception: pass
             
             cb = QApplication.clipboard()
-            cb.setImage(QImage(self.raw_content), QClipboard.Clipboard)
+            self._temp_mime = QMimeData()
+            self._temp_mime.setImageData(QImage(self.raw_content))
+            self._temp_mime.setUrls([QUrl.fromLocalFile(self.raw_content)])
+            cb.setMimeData(self._temp_mime)
+            QCoreApplication.processEvents()
         else:
             monitor.last_ui_copy = self.raw_content
             pyperclip.copy(self.raw_content)
-            
+
         self.copy_btn.setText("✓")
         QTimer.singleShot(800, self._reset_btn)
 
-    def mousePressEvent(self, event):
+    def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # 1. Update clipboard without triggering monitor add_item
             from clipboard import monitor
             if self.category == "IMAGE":
                 from PyQt5.QtWidgets import QApplication
                 from PyQt5.QtGui import QImage, QClipboard
+                from PyQt5.QtCore import QUrl, QMimeData, QCoreApplication
                 import hashlib
                 from PIL import Image
-                
+
                 try:
                     pil_img = Image.open(self.raw_content)
                     if pil_img.mode != 'RGB': pil_img = pil_img.convert('RGB')
                     monitor.last_ui_image_hash = hashlib.md5(pil_img.tobytes()).hexdigest()
                 except Exception: pass
-                
+
                 cb = QApplication.clipboard()
-                cb.setImage(QImage(self.raw_content), QClipboard.Clipboard)
+                self._temp_mime = QMimeData()
+                self._temp_mime.setImageData(QImage(self.raw_content))
+                self._temp_mime.setUrls([QUrl.fromLocalFile(self.raw_content)])
+                cb.setMimeData(self._temp_mime)
+                QCoreApplication.processEvents()
             else:
                 monitor.last_ui_copy = self.raw_content
                 pyperclip.copy(self.raw_content)
-            
-            # 2. Notification: change button and time label
+
             self.copy_btn.setText("✓")
             old_time = self.time_label.text()
             self.time_label.setText("Pasted!")
@@ -132,7 +135,7 @@ class ClipboardItemWidget(QFrame):
                 self.time_label.setStyleSheet(f"color: {self.palette['accent']}; font-weight: bold;")
             else:
                 self.time_label.setStyleSheet("color: #4ade80; font-weight: bold;")
-            
+
             def reset():
                 self._reset_btn()
                 try:
@@ -144,15 +147,14 @@ class ClipboardItemWidget(QFrame):
 
             QTimer.singleShot(2000, reset)
 
-            # 3. Paste directly to the underlying app
             import keyboard
-            QTimer.singleShot(50, lambda: keyboard.send('ctrl+v'))
-            
-        super().mousePressEvent(event)
+            delay = 250 if self.category == "IMAGE" else 50
+            QTimer.singleShot(delay, lambda: keyboard.send('ctrl+v'))
+
+        super().mouseReleaseEvent(event)
 
     def apply_styles(self, p):
         self.setStyleSheet(f"""
-            /* Main Record Base */
             #ItemCard {{ 
                 background-color: {p['widget_bg']}; 
                 border-radius: 20px; 
@@ -160,14 +162,10 @@ class ClipboardItemWidget(QFrame):
                 margin: 3px 10px; 
                 outline: none;
             }}
-
-            /* GLOW EFFECT ON HOVER */
             #ItemCard:hover {{ 
                 background-color: {p['card_hover_bg']}; 
                 border: 2px solid {p['accent']}; 
             }}
-
-            /* Button Styles */
             #ActionBtn {{ 
                 background-color: transparent; 
                 color: transparent;
@@ -176,34 +174,25 @@ class ClipboardItemWidget(QFrame):
                 font-size: 18px;
                 outline: none;
             }}
-
-            /* Show button smoothly when card is hovered */
             #ItemCard:hover #ActionBtn {{
                 background-color: {p['main_bg']}; 
                 color: {p['text_dim']};
                 border: 1px solid {p['card_border']}; 
             }}
-
             #ActionBtn:hover {{
                 color: {p['accent']} !important;
                 border: 1px solid {p['accent']} !important;
             }}
-
-            /* Text Styling */
             QLabel#ContentLabel {{ 
                 color: {p['text_main']}; 
                 font-size: 15px; 
                 font-weight: 500; 
                 padding: 10px 0px; 
             }}
-
             QLabel#TimeLabel {{ 
                 color: {p['text_dim']}; 
                 font-size: 12px; 
             }}
-
-            /* UNIVERSAL TAG STYLE (TEXT, URL, CODE, EMAIL, etc.) */
-            /* Target any objectName that starts with "Tag" */
             [objectName^="Tag"] {{ 
                 font-size: 10px; 
                 font-weight: 800; 
@@ -221,7 +210,6 @@ class ClipboardItemWidget(QFrame):
         if self.category == "IMAGE": return
         metrics = QFontMetrics(self.content_label.font())
         display_text = self.raw_content.replace('\n', ' ').strip()
-        # Reserved space for the copy button
         target_width = self.width() - 95
         if target_width > 0:
             self.content_label.setText(metrics.elidedText(display_text, Qt.ElideRight, target_width))

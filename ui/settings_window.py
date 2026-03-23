@@ -137,6 +137,28 @@ class SettingsWindow(QWidget):
         startup_sw.clicked.connect(handle_startup_toggle)
         self.s_layout.addWidget(SettingsCard("Launch on Startup", "Open automatically on pc login.", startup_sw))
 
+        # 3.5 Floating Widget Toggle
+        float_sw = ToggleSwitch()
+        float_sw.setChecked(config.settings.get("floating_widget", True))
+        
+        def handle_float_toggle():
+            state = float_sw.isChecked()
+            config.save_setting("floating_widget", state)
+            
+            from PyQt5.QtWidgets import QApplication
+            from ui.starting_round_window import FloatingButton
+            
+            # Dynamically push visibility update without a restart
+            for widget in QApplication.topLevelWidgets():
+                if isinstance(widget, FloatingButton):
+                    if state:
+                        widget.show()
+                    else:
+                        widget.hide()
+            
+        float_sw.clicked.connect(handle_float_toggle)
+        self.s_layout.addWidget(SettingsCard("Enable Floating Button", "Show the quick access blue dot on screen.", float_sw))
+
         # 4. Shortcut Input
         hotkey = QLineEdit()
         hotkey.setFixedWidth(240)

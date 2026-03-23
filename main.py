@@ -47,8 +47,19 @@ if __name__ == "__main__":
     # Initialize Main Window (Styles will now be applied from the start)
     main_win = MainWindow()
 
-    # Initialize and show the Floating Button
+    # Always instantiate so it's ready in memory, but hide unless enabled
     floater = FloatingButton(main_win)
-    floater.show()
+    if config.settings.get("floating_widget", True):
+        floater.show()
+
+    if config.settings.get("first_run", True):
+        from ui.onboarding_window import OnboardingWindow
+        onboarding = OnboardingWindow()
+        onboarding.exec_()
+
+    # Open the Dashboard automatically by default on launch
+    from ui.dashboard_window import HistoryWindow
+    main_win.dashboard_win = HistoryWindow(parent_window=main_win)
+    main_win.dashboard_win.show()
 
     sys.exit(app.exec_())
