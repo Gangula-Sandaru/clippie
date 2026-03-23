@@ -42,7 +42,13 @@ if __name__ == "__main__":
     t = threading.Thread(target=monitor.run, daemon=True)
     t.start()
 
+    from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
+    from PyQt5.QtGui import QIcon
+
     app = QApplication(sys.argv)
+    
+    # Required for the system tray to keep running the app when all windows are closed
+    app.setQuitOnLastWindowClosed(False)
 
     # Initialize Main Window (Styles will now be applied from the start)
     main_win = MainWindow()
@@ -61,5 +67,76 @@ if __name__ == "__main__":
     from ui.dashboard_window import HistoryWindow
     main_win.dashboard_win = HistoryWindow(parent_window=main_win)
     main_win.dashboard_win.show()
+
+    # --- SYSTEM TRAY SETUP ---
+    tray = QSystemTrayIcon(QIcon(resource_path("assets/icon.ico")), app)
+    
+    menu = QMenu()
+    # Remove system native window frame for border-radius to work on standard QMenu instances sometimes
+    from PyQt5.QtCore import Qt
+    menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+    menu.setAttribute(Qt.WA_TranslucentBackground)
+    
+    def update_tray_theme(p):
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {p['widget_bg']};
+                color: {p['text_main']};
+                border: 1px solid {p['card_border']};
+                border-radius: 8px;
+                padding: 5px;
+            }}
+            QMenu::item {{
+                background-color: transparent;
+                padding: 6px 25px 6px 15px;
+                border-radius: 5px;
+                margin: 2px 4px;
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QMenu::item:selected {{
+                background-color: {p['card_hover_bg']};
+                color: {p['accent']};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background-color: {p['card_border']};
+                margin: 4px 10px;
+            }}
+        """)
+        
+    theme_engine.theme_changed.connect(update_tray_theme)
+    update_tray_theme(theme_engine.current_palette)
+    
+    open_action = QAction("Open Dashboard")
+    def open_dash():
+        if main_win.dashboard_win is None or not main_win.dashboard_win.isVisible():
+            main_win.dashboard_win = HistoryWindow(parent_window=main_win)
+        main_win.dashboard_win.show()
+    open_action.triggered.connect(open_dash)
+    
+    pause_action = QAction("Pause Tracking")
+    def toggle_pause():
+        monitor.is_paused = not getattr(monitor, 'is_paused', False)
+        pause_action.setText("Resume Tracking" if monitor.is_paused else "Pause Tracking")
+    pause_action.triggered.connect(toggle_pause)
+    
+    quit_action = QAction("Quit Clippie")
+    quit_action.triggered.connect(app.quit)
+    
+    menu.addAction(open_action)
+    menu.addAction(pause_action)
+    menu.addSeparator()
+    menu.addAction(quit_action)
+    
+    tray.setContextMenu(menu)
+    tray.setToolTip("Clippie - Smart Clipboard Manager")
+    
+    def on_tray_activated(reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            open_dash()
+            
+    tray.activated.connect(on_tray_activated)
+    tray.show()
 
     sys.exit(app.exec_())

@@ -13,6 +13,7 @@ class ClipboardMonitor:
     def __init__(self):
         self.last_clipboard = ""
         self.last_image_hash = ""
+        self.is_paused = False
 
     def run(self):
         global last_ui_copy, last_ui_image_hash
@@ -24,6 +25,10 @@ class ClipboardMonitor:
             
         while True:
             try:
+                if getattr(self, 'is_paused', False):
+                    time.sleep(0.5)
+                    continue
+                    
                 # 1. Check for image
                 img = ImageGrab.grabclipboard()
                 if img is not None and hasattr(img, 'save'):
