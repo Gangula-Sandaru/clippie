@@ -9,35 +9,43 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # 1. Checkout repo
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # 2. Setup Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
+      # 3. Install dependencies
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller pyqt6
 
-      - name: Build .exe with PyInstaller
+      # 4. Build .exe with PyInstaller
+      - name: Build .exe
         run: |
           pyinstaller --onefile --windowed --icon=assets\clippie.ico main.py
 
-      - name: Install Inno Setup silently
+      # 5. Install Inno Setup silently
+      - name: Install Inno Setup
+        shell: powershell
         run: |
           Invoke-WebRequest "https://jrsoftware.org/download.php/is6install.exe" -OutFile "is6install.exe"
           Start-Process -FilePath "is6install.exe" -ArgumentList "/VERYSILENT /NORESTART /SP-" -Wait
 
-      - name: Build installer with Inno Setup
+      # 6. Build installer using Inno Setup
+      - name: Build installer
         run: |
           "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Clippie.iss
 
-      - name: Upload installer artifact
-        uses: actions/upload-artifact@v3
+      # 7. Upload installer artifact
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
         with:
           name: Clippie-Installer
           path: Output\ClippieInstaller.exe
