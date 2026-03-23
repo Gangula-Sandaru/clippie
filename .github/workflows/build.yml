@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Force Node.js 24 for actions
+  PYTHON_VERSION: '3.11'
+
 jobs:
   build:
     runs-on: windows-latest
@@ -13,23 +17,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. Setup Python
+      # 2. Set up Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      # 3. Install dependencies
-      - name: Install Python dependencies
+      # 3. Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller pyqt6
 
       # 4. Build .exe with PyInstaller
-      - name: Build .exe
+      - name: Build Clippie .exe
         run: |
           pyinstaller --onefile --windowed --icon=assets\clippie.ico main.py
+          echo "Executable built at dist\main.exe"
 
       # 5. Install Inno Setup silently
       - name: Install Inno Setup
@@ -38,14 +43,24 @@ jobs:
           Invoke-WebRequest "https://jrsoftware.org/download.php/is6install.exe" -OutFile "is6install.exe"
           Start-Process -FilePath "is6install.exe" -ArgumentList "/VERYSILENT /NORESTART /SP-" -Wait
 
-      # 6. Build installer using Inno Setup
-      - name: Build installer
+      # 6. Create versioned installer
+      - name: Build Installer with Inno Setup
         run: |
+          # Use Git commit SHA for versioning
+          $sha = git rev-parse --short HEAD
+          $installerName = "ClippieInstaller-$sha.exe"
+
+          # Update your .iss file dynamically if needed
+          (Get-Content Clippie.iss) -replace "OutputFileName=.*", "OutputFileName=Output\\$installerName" | Set-Content Clippie.iss
+
+          # Build installer
           "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Clippie.iss
 
-      # 7. Upload installer artifact
+          echo "Installer built: Output\$installerName"
+
+      # 7. Upload artifact
       - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
           name: Clippie-Installer
-          path: Output\ClippieInstaller.exe
+          path: Output\*.exe
