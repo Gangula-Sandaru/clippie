@@ -1,63 +1,60 @@
-name: Build Clippie Installer
+name: Build Clippie .exe
 
+# Trigger on push to main or when a release is created
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
 
-    # Force Node.js 24 for all actions in this job
-    defaults:
-      run:
-        shell: pwsh
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      PYTHON_VERSION: '3.11'
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
     steps:
-      # 1. Checkout code (with Node 24 forced)
-      - name: Checkout code
+      # 1. Checkout your code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       # 2. Set up Python
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: 3.11
 
       # 3. Install dependencies
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller pyqt6
+          pip install pyinstaller
 
-      # 4. Build .exe with PyInstaller
-      - name: Build Clippie .exe
+      # 4. Build the .exe using PyInstaller
+      - name: Build .exe with PyInstaller
         run: |
-          pyinstaller --onefile --windowed --icon=assets\clippie.ico main.py
-          echo "Executable built at dist\main.exe"
+          pyinstaller --noconfirm --onefile --windowed main.py
 
-      # 5. Install Inno Setup silently
+      # 5. Install Inno Setup
       - name: Install Inno Setup
         run: |
-          Invoke-WebRequest "https://jrsoftware.org/download.php/is6install.exe" -OutFile "is6install.exe"
-          Start-Process -FilePath "is6install.exe" -ArgumentList "/VERYSILENT /NORESTART /SP-" -Wait
+          choco install innosetup -y
+        shell: powershell
 
-      # 6. Build installer with Inno Setup
-      - name: Build Installer
+      # 6. Build installer using Inno Setup
+      - name: Build installer
         run: |
-          $sha = git rev-parse --short HEAD
-          $installerName = "ClippieInstaller-$sha.exe"
-          (Get-Content Clippie.iss) -replace "OutputFileName=.*", "OutputFileName=Output\\$installerName" | Set-Content Clippie.iss
-          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Clippie.iss
-          echo "Installer built: Output\$installerName"
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+        shell: cmd
 
-      # 7. Upload artifact
-      - name: Upload Installer
+      # 7. Upload artifacts (.exe and installer)
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Clippie-Installer
-          path: Output\*.exe
+          name: clippie-build
+          path: |
+            dist/*.exe
+            output-installer/*.exe
