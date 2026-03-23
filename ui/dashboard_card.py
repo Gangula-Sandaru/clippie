@@ -9,9 +9,8 @@ from ui.dialog_window import ModernDialog
 
 class ClipboardCard(QFrame):
     def __init__(self, item_id, category, is_fav, time_ago, content, parent, p, delay_ms=0):
-        # Pass parent container to prevent PyQt from rendering this as a top-level OS window
         super().__init__(parent.container if hasattr(parent, 'container') else parent)
-        self.parent_window = parent  # This MUST be the HistoryWindow/Dashboard
+        self.parent_window = parent
         self.item_id = item_id
         self.content = content
         self.is_fav = bool(is_fav)
@@ -25,7 +24,6 @@ class ClipboardCard(QFrame):
         self.main_layout.setContentsMargins(22, 18, 22, 18)
         self.main_layout.setSpacing(8)
 
-        # --- Header ---
         header = QHBoxLayout()
         self.category = str(category).upper() if category else "TEXT"
         self.tag = QLabel(self.category)
@@ -36,7 +34,6 @@ class ClipboardCard(QFrame):
         header.addWidget(self.time_lbl)
         header.addStretch()
 
-        # --- Round Action Buttons ---
         self.btn_fav = self._create_action_btn("★", "FavBtn", "#FFD700")
         self.btn_edit = self._create_action_btn("✏", "EditBtn", p['accent'])
         self.btn_copy = self._create_action_btn("❐", "CopyBtn", p['accent'])
@@ -65,9 +62,6 @@ class ClipboardCard(QFrame):
         self.update_content()
         self.apply_styles(p)
 
-        # --- APPEARANCE ANIMATION ---
-        # We use a staggered show() instead of opacity to prevent nested QGraphicsEffect crashes
-        # since the child buttons already use QGraphicsDropShadowEffect.
         self.hide()
         if delay_ms > 0:
             QTimer.singleShot(delay_ms, self.show)
@@ -111,7 +105,6 @@ class ClipboardCard(QFrame):
 
     def toggle_fav(self):
         toggle_favorite(self.item_id, not self.is_fav)
-        # Call the refresh method on parent window
         if hasattr(self.parent_window, "refresh_items"):
             self.parent_window.refresh_items()
 
@@ -136,7 +129,6 @@ class ClipboardCard(QFrame):
                     self.parent_window.refresh_items()
 
     def delete_me(self):
-        # Create the modern dialog
         dialog = ModernDialog(
             "Confirm Action",
             "This item will be permanently removed from your history.",
@@ -144,7 +136,6 @@ class ClipboardCard(QFrame):
             self.parent_window
         )
 
-        # Center over the HistoryWindow
         parent_geo = self.parent_window.geometry()
         dialog.move(
             parent_geo.center().x() - dialog.width() // 2,
@@ -162,6 +153,7 @@ class ClipboardCard(QFrame):
         if getattr(self, 'category', '') == "IMAGE":
             from PyQt5.QtWidgets import QApplication
             from PyQt5.QtGui import QImage, QClipboard
+            from PyQt5.QtCore import QUrl, QMimeData, QCoreApplication
             import hashlib
             from PIL import Image
             
@@ -172,7 +164,11 @@ class ClipboardCard(QFrame):
             except Exception: pass
             
             cb = QApplication.clipboard()
-            cb.setImage(QImage(self.content), QClipboard.Clipboard)
+            self._temp_mime = QMimeData()
+            self._temp_mime.setImageData(QImage(self.content))
+            self._temp_mime.setUrls([QUrl.fromLocalFile(self.content)])
+            cb.setMimeData(self._temp_mime)
+            QCoreApplication.processEvents()
         else:
             pyperclip.copy(self.content)
             
@@ -209,6 +205,5 @@ class ClipboardCard(QFrame):
             return
         self.expanded = not self.expanded
         self.update_content()
-        # Ensure the container resizes to fit the expanded text
         QTimer.singleShot(10, lambda: self.parent_window.container.adjustSize())
 
