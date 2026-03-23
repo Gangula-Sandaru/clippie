@@ -216,4 +216,4 @@ class ClipboardItemWidget(QFrame):
 
     def resizeEvent(self, event):
         self.update_elided_text()
-        super().resizeEvent(event)
+        super().resizeEvent(event)
