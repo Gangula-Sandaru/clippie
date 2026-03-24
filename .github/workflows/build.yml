@@ -36,11 +36,27 @@ jobs:
 
       - name: Build Executable (Windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          # 1. Generate the raw EXE with PyInstaller
-          pyinstaller --noconfirm --onefile --windowed --icon="icon.ico" --name "clippie-windows" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" --add-data "clipboard;clipboard" --add-data "models;models" --add-data "utils;utils" main.py
+          # 1. Clean previous builds
+          if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
+
+          # 2. Run your specific PyInstaller command
+          pyinstaller --noconfirm --onedir --windowed --name "Clippie" `
+          --icon "assets/icon.ico" `
+          --add-data "assets;assets" `
+          --add-data "themes;themes" `
+          --add-data "ui;ui" `
+          --add-data "db;db" `
+          --add-data "clipboard;clipboard" `
+          --add-data "models;models" `
+          --add-data "utils;utils" `
+          --hidden-import "PyQt5.QtCore" `
+          --hidden-import "PyQt5.QtGui" `
+          --hidden-import "PyQt5.QtWidgets" `
+          main.py
           
-          # 2. Compile the Installer using Inno Setup (ISCC)
+          # 3. Compile the Inno Setup Installer
           iscc clippie.iss
 
       - name: Build Executable (Linux/macOS)
