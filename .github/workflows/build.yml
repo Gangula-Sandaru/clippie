@@ -38,10 +38,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          # 1. Clean previous builds
-          if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
-
-          # 2. Run your specific PyInstaller command
+          # 1. Run your updated PyInstaller command
           pyinstaller --noconfirm --onedir --windowed --name "Clippie" `
           --icon "assets/icon.ico" `
           --add-data "assets;assets" `
@@ -56,7 +53,7 @@ jobs:
           --hidden-import "PyQt5.QtWidgets" `
           main.py
           
-          # 3. Compile the Inno Setup Installer
+          # 2. Compile the Installer using clippie.iss
           iscc clippie.iss
 
       - name: Build Executable (Linux/macOS)
