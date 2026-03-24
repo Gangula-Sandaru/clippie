@@ -1,44 +1,75 @@
-name: Build Clippie EXE
+name: Build and Release Clippie
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Enter the version (e.g., v1.0.0)"
+        required: true
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
     
-    # 🛠️ This forces the runner to use Node 24 for all steps
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.2.2 # Explicit latest version
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5.3.0 # Explicit latest version
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller PyQt5 pyperclip
+          # Add any other libraries from your requirements.txt here
 
-      - name: Build EXE with PyInstaller
-        # Added your data folders to ensure the EXE actually runs!
+      - name: Build Executable (Windows)
+        if: matrix.os == 'windows-latest'
         run: |
-          pyinstaller --noconfirm --onedir --windowed --name "Clippie" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" main.py
+          pyinstaller --noconfirm --onefile --windowed --name "clippie-windows" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" main.py
 
-      - name: Create Installer
-        shell: cmd
+      - name: Build Executable (Linux/macOS)
+        if: matrix.os != 'windows-latest'
         run: |
-          iscc clippie.iss
+          pyinstaller --noconfirm --onefile --windowed --name "clippie-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'macos' }}" --add-data "assets:assets" --add-data "themes:themes" --add-data "ui:ui" --add-data "db:db" main.py
 
-      - name: Upload Installer
-        uses: actions/upload-artifact@v4.4.0 # Explicit latest version
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: Clippie-Installation-Package
-          path: Output/*.exe
+          name: clippie-${{ matrix.os }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./downloads
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
+          files: |
+            ./downloads/clippie-windows.exe
+            ./downloads/clippie-linux
+            ./downloads/clippie-macos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
