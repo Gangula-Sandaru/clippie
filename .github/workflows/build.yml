@@ -37,10 +37,10 @@ jobs:
       - name: Build Executable (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          # 1. Create the standalone EXE
+          # 1. Generate the raw EXE with PyInstaller
           pyinstaller --noconfirm --onefile --windowed --icon="icon.ico" --name "clippie-windows" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" --add-data "clipboard;clipboard" --add-data "models;models" --add-data "utils;utils" main.py
           
-          # 2. Wrap the EXE into an Inno Setup Installer
+          # 2. Compile the Installer using Inno Setup (ISCC)
           iscc clippie.iss
 
       - name: Build Executable (Linux/macOS)
@@ -52,10 +52,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: clippie-${{ matrix.os }}
-          path: |
-            dist/clippie-setup.exe
-            dist/clippie-linux
-            dist/clippie-macos
+          path: dist/*
 
   release:
     needs: build
