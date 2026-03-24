@@ -36,11 +36,18 @@ jobs:
 
       - name: Build Executable (Windows)
         if: matrix.os == 'windows-latest'
-        run: pyinstaller --noconfirm --onefile --windowed --icon="icon.ico" --name "clippie-windows" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" --add-data "clipboard;clipboard" --add-data "models;models" --add-data "utils;utils" main.py
+        shell: pwsh
+        run: |
+          # Check if icon exists to prevent crash
+          $iconFlag = ""
+          if (Test-Path "icon.ico") { $iconFlag = '--icon="icon.ico"' }
+          
+          pyinstaller --noconfirm --onefile --windowed $iconFlag --name "clippie-windows" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" --add-data "clipboard;clipboard" --add-data "models;models" --add-data "utils;utils" main.py
 
       - name: Build Executable (Linux/macOS)
         if: matrix.os != 'windows-latest'
-        run: pyinstaller --noconfirm --onefile --windowed --name "clippie-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'macos' }}" --add-data "assets:assets" --add-data "themes:themes" --add-data "ui:ui" --add-data "db:db" --add-data "clipboard:clipboard" --add-data "models:models" --add-data "utils:utils" main.py
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "clippie-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'macos' }}" --add-data "assets:assets" --add-data "themes:themes" --add-data "ui:ui" --add-data "db:db" --add-data "clipboard:clipboard" --add-data "models:models" --add-data "utils:utils" main.py
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
