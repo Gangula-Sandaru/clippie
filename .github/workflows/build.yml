@@ -7,7 +7,6 @@ on:
         description: "Enter the version (e.g., v1.0.0)"
         required: true
 
-# 🔑 THIS SECTION FIXES THE "RESOURCE NOT ACCESSIBLE" ERROR
 permissions:
   contents: write
 
@@ -19,7 +18,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Quiets the warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repository
@@ -33,18 +32,38 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller PyQt5 pyperclip
-          # Add any other libraries from your requirements.txt here
+          pip install pyinstaller PyQt5 pyperclip keyboard mouseinfo pillow pyautogui pygetwindow pyrect pyscreeze pytweening
 
       - name: Build Executable (Windows)
         if: matrix.os == 'windows-latest'
+        # 🎨 Added --icon="icon.ico" here
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "clippie-windows" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" main.py
+          pyinstaller --noconfirm --onefile --windowed ^
+          --icon="icon.ico" ^
+          --name "clippie-windows" ^
+          --add-data "assets;assets" ^
+          --add-data "themes;themes" ^
+          --add-data "ui;ui" ^
+          --add-data "db;db" ^
+          --add-data "clipboard;clipboard" ^
+          --add-data "models;models" ^
+          --add-data "utils;utils" ^
+          main.py
 
       - name: Build Executable (Linux/macOS)
         if: matrix.os != 'windows-latest'
+        # Note: Icons on Mac/Linux work differently (.icns), so we skip it or use a separate file
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "clippie-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'macos' }}" --add-data "assets:assets" --add-data "themes:themes" --add-data "ui:ui" --add-data "db:db" main.py
+          pyinstaller --noconfirm --onefile --windowed ^
+          --name "clippie-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'macos' }}" ^
+          --add-data "assets:assets" ^
+          --add-data "themes:themes" ^
+          --add-data "ui:ui" ^
+          --add-data "db:db" ^
+          --add-data "clipboard:clipboard" ^
+          --add-data "models:models" ^
+          --add-data "utils:utils" ^
+          main.py
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
