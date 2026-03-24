@@ -36,13 +36,8 @@ jobs:
 
       - name: Build Executable (Windows)
         if: matrix.os == 'windows-latest'
-        shell: pwsh
         run: |
-          # Check if icon exists to prevent crash
-          $iconFlag = ""
-          if (Test-Path "icon.ico") { $iconFlag = '--icon="icon.ico"' }
-          
-          pyinstaller --noconfirm --onefile --windowed $iconFlag --name "clippie-windows" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" --add-data "clipboard;clipboard" --add-data "models;models" --add-data "utils;utils" main.py
+          pyinstaller --noconfirm --onefile --windowed --name "clippie-windows" --add-data "assets;assets" --add-data "themes;themes" --add-data "ui;ui" --add-data "db;db" --add-data "clipboard;clipboard" --add-data "models;models" --add-data "utils;utils" main.py
 
       - name: Build Executable (Linux/macOS)
         if: matrix.os != 'windows-latest'
