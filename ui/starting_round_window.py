@@ -41,6 +41,9 @@ class RoundIconLabel(QLabel):
 class FloatingButton(QWidget):
     double_ctrl_signal = pyqtSignal()
     esc_signal = pyqtSignal()
+    start_ocr_timer_signal = pyqtSignal()
+    stop_ocr_timer_signal = pyqtSignal()
+    ocr_activate_signal = pyqtSignal()
 
     def __init__(self, main_window):
         super().__init__()
@@ -51,7 +54,18 @@ class FloatingButton(QWidget):
         self.setFixedSize(90, 90)
 
         self.last_ctrl_time = 0
+        self.ctrl_is_pressed = False
         self.opened_via_hotkey = False
+
+        self.start_ocr_timer_signal.connect(self._start_ocr_timer)
+        self.stop_ocr_timer_signal.connect(self._stop_ocr_timer)
+        self.ocr_activate_signal.connect(self.activate_ocr_window)
+
+        self.ocr_timer = QTimer()
+        self.ocr_timer.setSingleShot(True)
+        self.ocr_timer.timeout.connect(self.ocr_activate_signal.emit)
+
+        keyboard.on_press_key("ctrl", self.on_ctrl_press)
         keyboard.on_release_key("ctrl", self.on_ctrl_release)
         keyboard.on_release_key("esc", self.on_esc_release)
         self.double_ctrl_signal.connect(self.toggle_main_window_from_hotkey)
@@ -90,13 +104,47 @@ class FloatingButton(QWidget):
             self.anim_rot.setEndValue(0)
             self.anim_rot.start()
 
+    def on_ctrl_press(self, e):
+        if getattr(self, 'ctrl_is_pressed', False):
+            return
+        self.ctrl_is_pressed = True
+        
+        current_time = time.time()
+        if current_time - self.last_ctrl_time < 0.3:
+            self.start_ocr_timer_signal.emit()
+
     def on_ctrl_release(self, e):
+        self.ctrl_is_pressed = False
+        self.stop_ocr_timer_signal.emit()
+
         current_time = time.time()
         if current_time - self.last_ctrl_time < 0.3:
             self.last_ctrl_time = 0
             self.double_ctrl_signal.emit()
         else:
             self.last_ctrl_time = current_time
+
+    def _start_ocr_timer(self):
+        self.ocr_timer.start(500)
+
+    def _stop_ocr_timer(self):
+        if self.ocr_timer.isActive():
+            self.ocr_timer.stop()
+
+    def activate_ocr_window(self):
+        if not hasattr(self, 'ocr_window'):
+            from ui.ocr_window import OCRWindow
+            self.ocr_window = OCRWindow()
+        
+        screen = QApplication.primaryScreen().availableGeometry()
+        if self.x() + self.width() + self.ocr_window.width() + 10 <= screen.right():
+            target_x = self.x() + self.width() + 5
+        else:
+            target_x = self.x() - self.ocr_window.width() - 5
+            
+        self.ocr_window.move(target_x, self.y() + 15)
+        self.ocr_window.show()
+        QTimer.singleShot(3000, self.ocr_window.hide)
 
     def toggle_main_window_from_hotkey(self):
         if self.main_window.isVisible() and not getattr(self.main_window, '_is_hiding', False):
