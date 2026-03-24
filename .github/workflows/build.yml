@@ -7,16 +7,19 @@ on:
         description: "Enter the version (e.g., v1.0.0)"
         required: true
 
+# 🔑 THIS SECTION FIXES THE "RESOURCE NOT ACCESSIBLE" ERROR
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-
     runs-on: ${{ matrix.os }}
     
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Quiets the warnings
 
     steps:
       - name: Checkout repository
