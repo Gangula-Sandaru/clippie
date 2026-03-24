@@ -64,7 +64,7 @@ Feel free to open issues, submit Pull Requests, or fork the repository! Contribu
 
 If you find Clippie actively improving your workflow every single day, consider fueling the project by buying me a coffee:
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/YOUR_KOFI_LINK)
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/gangulasandaru)
 *(Or support through [Patreon](https://patreon.com/YOUR_PATREON_LINK) / [GitHub Sponsors](https://github.com/sponsors/YOUR_USERNAME))*
 
 Contributions directly fund hosting costs for the built-in Cloud Sync backup mechanisms and enable continued full-time optimizations! Thanks for checking it out! 
