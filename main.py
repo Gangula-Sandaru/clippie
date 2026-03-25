@@ -37,11 +37,6 @@ if __name__ == "__main__":
     # use the 'history_limit' and 'startup' settings automatically.
     # --- --- --- --- --- --- --- ---
 
-    # Start Clipboard Monitor Thread
-    monitor = ClipboardMonitor()
-    t = threading.Thread(target=monitor.run, daemon=True)
-    t.start()
-
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
     from PyQt5.QtGui import QIcon
 
@@ -49,6 +44,11 @@ if __name__ == "__main__":
     
     # Required for the system tray to keep running the app when all windows are closed
     app.setQuitOnLastWindowClosed(False)
+
+    # Start Clipboard Monitor Thread
+    monitor = ClipboardMonitor()
+    t = threading.Thread(target=monitor.run, daemon=True)
+    t.start()
 
     # Initialize Main Window (Styles will now be applied from the start)
     main_win = MainWindow()
@@ -138,5 +138,14 @@ if __name__ == "__main__":
             
     tray.activated.connect(on_tray_activated)
     tray.show()
+
+    # --- CROSS-THREAD REFRESH LOGIC ---
+    def handle_new_item():
+        if main_win.dashboard_win and main_win.dashboard_win.isVisible():
+            # Refreshing dashboard safely on main thread via signal connection
+            main_win.dashboard_win.refresh_items()
+
+    monitor.item_added.connect(handle_new_item)
+    # --- --- --- --- --- --- --- --- ---
 
     sys.exit(app.exec_())
