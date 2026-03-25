@@ -71,6 +71,61 @@ class OCRWindow(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.RightButton:
             self.hide()
+        elif event.button() == Qt.LeftButton:
+            self.selection_start = event.pos()
+            self.selection_end = event.pos()
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, 'selection_start', None) is not None:
+            self.selection_end = event.pos()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and getattr(self, 'selection_start', None) is not None:
+            self.selection_end = event.pos()
+            from PyQt5.QtCore import QRect
+            rect = QRect(self.selection_start, self.selection_end).normalized()
+            
+            self.selection_start = None
+            self.selection_end = None
+            self.update()
+            
+            if rect.width() > 10 and rect.height() > 10:
+                self.hide()
+                # Run OCR task after giving the window exactly enough time to fully hide
+                QTimer.singleShot(100, lambda: self.perform_ocr(rect))
+
+    def perform_ocr(self, rect):
+        from ocr.capture import capture_screen_rect
+        from ocr.processing import process_image
+        from PyQt5.QtWidgets import QMessageBox
+        try:
+            img = capture_screen_rect(rect.x(), rect.y(), rect.width(), rect.height())
+            text = process_image(img)
+            
+            if text:
+                msg = QMessageBox()
+                msg.setIcon(QMessageBox.Information)
+                msg.setWindowTitle("OCR Success")
+                msg.setText("Text copied to clipboard.")
+                msg.setWindowFlags(Qt.WindowStaysOnTopHint)
+                msg.exec_()
+            else:
+                msg = QMessageBox()
+                msg.setIcon(QMessageBox.Warning)
+                msg.setWindowTitle("OCR Notice")
+                msg.setText("No text was detected in that region.")
+                msg.setWindowFlags(Qt.WindowStaysOnTopHint)
+                msg.exec_()
+                
+        except Exception as e:
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Critical)
+            msg.setWindowTitle("OCR Error")
+            msg.setText(f"OCR subsystem failed.\n\nError: {e}\n\nPlease install Tesseract OCR (tesseract-ocr.github.io).")
+            msg.setWindowFlags(Qt.WindowStaysOnTopHint)
+            msg.exec_()
 
     def update_animation(self):
         speed = 0.015 * (1.0 - self.progress) + 0.01
@@ -142,7 +197,7 @@ class OCRWindow(QWidget):
         self.draw_ripple(painter, base_radius * 0.85, max_dist, normalize_fade)
         self.draw_ripple(painter, base_radius * 0.70, max_dist, normalize_fade)
 
-        if self.progress >= 1.0:
+        if self.progress >= 1.0 and getattr(self, 'selection_start', None) is None:
             # Add a dark drop shadow to the text so it's readable on any transparent background
             font = painter.font()
             font.setPointSize(28)
@@ -155,6 +210,19 @@ class OCRWindow(QWidget):
             
             painter.setPen(QColor(255, 255, 255, 220)) # Text
             painter.drawText(text_rect, Qt.AlignCenter, "OCR Mode Active\nPress Esc or Right-click to exit")
+
+        if getattr(self, 'selection_start', None) is not None:
+            from PyQt5.QtCore import QRect
+            rect = QRect(self.selection_start, self.selection_end).normalized()
+            
+            # Since the widget is translucent, clearing the overlay restores the raw desktop natively!
+            painter.setCompositionMode(QPainter.CompositionMode_Clear)
+            painter.fillRect(rect, Qt.transparent)
+            
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            painter.setPen(QPen(QColor(self.base_color), 2, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect)
 
     def draw_ripple(self, painter, radius, max_dist, global_fade):
         if radius <= 0: return
