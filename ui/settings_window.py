@@ -117,7 +117,7 @@ class SettingsWindow(QWidget):
         limit_box = QComboBox()
         limit_box.setObjectName("ModernCombo")
         limit_box.setFixedWidth(240)
-        limit_box.addItems(["50 Records", "100 Records", "1000 Records", "Unlimited"])
+        limit_box.addItems(["50 Records", "100 Records", "1000 Records", "Ultimate"])
         limit_box.blockSignals(True)
         limit_box.setCurrentText(config.settings.get("history_limit", "100 Records"))
         limit_box.blockSignals(False)
