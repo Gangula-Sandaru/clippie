@@ -1,10 +1,213 @@
 import sys
 import math
-from PyQt5.QtWidgets import QWidget, QApplication
-from PyQt5.QtCore import Qt, QTimer, QPointF
-from PyQt5.QtGui import QPainter, QColor, QPainterPath, QPen
+from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QPushButton, QHBoxLayout, QFrame, QTextEdit, QGraphicsOpacityEffect
+from PyQt5.QtCore import Qt, QTimer, QPointF, QRect, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt5.QtGui import QPainter, QColor, QPainterPath, QPen, QFont, QLinearGradient, QBrush
 
 from themes.theme_manager import theme_engine
+from app_config import config
+import random
+
+class ResultOverlay(QTextEdit):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setFrameStyle(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        acc = theme_engine.current_palette.get('accent', '#2563eb')
+        self.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: transparent;
+                color: white;
+                font-family: 'Segoe UI';
+                font-size: 14px;
+                font-weight: 500;
+                padding: 10px;
+                selection-background-color: {acc};
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {acc};
+                border-radius: 2px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+        """)
+
+class OCRIndicator(QFrame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setFixedSize(280, 48)
+        self.morph_phase = 0.0
+        
+        # Styles
+        acc = theme_engine.current_palette.get('accent', '#2563eb')
+        bg = "rgba(10, 10, 10, 220)"
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {bg};
+                border: 1px solid {acc}66;
+                border-radius: 20px;
+            }}
+        """)
+        
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(15, 0, 15, 0)
+        self.layout.setSpacing(10)
+        
+        # Text Label
+        self.label = QLabel("OCR Mode On – Clippie")
+        self.label.setStyleSheet("color: white; font-family: 'Segoe UI'; font-size: 13px; font-weight: 600; background: transparent; border: none;")
+        
+        # Globe container for custom paint
+        self.globe_widget = QWidget()
+        self.globe_widget.setFixedSize(30, 30)
+        self.globe_widget.paintEvent = self.paint_globe
+        
+        self.layout.addWidget(self.globe_widget)
+        self.layout.addWidget(self.label)
+        
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self.update_morph)
+        self.anim_timer.start(30)
+
+    def update_morph(self):
+        self.morph_phase += 0.05
+        self.globe_widget.update()
+
+    def paint_globe(self, event):
+        painter = QPainter(self.globe_widget)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        acc = theme_engine.current_palette.get('accent', '#2563eb')
+        cx, cy = 15, 15
+        base_r = 10
+        
+        path = QPainterPath()
+        points = 8
+        for i in range(points + 1):
+            angle = (i / points) * 2 * math.pi
+            # Organic deformation using multiple sine waves
+            offset = 2.5 * math.sin(angle * 2 + self.morph_phase)
+            offset += 1.5 * math.cos(angle * 3 - self.morph_phase * 0.7)
+            
+            r = base_r + offset
+            px = cx + r * math.cos(angle)
+            py = cy + r * math.sin(angle)
+            
+            if i == 0: path.moveTo(px, py)
+            else: path.lineTo(px, py)
+        
+        path.closeSubpath()
+        
+        # Glow & Gradient
+        grad = QLinearGradient(0, 0, 30, 30)
+        grad.setColorAt(0, QColor(acc))
+        grad.setColorAt(1, QColor(acc).lighter(150))
+        
+        painter.setBrush(grad)
+        painter.setPen(Qt.NoPen)
+        painter.drawPath(path)
+        
+        # Center core light
+        painter.setBrush(QColor(255, 255, 255, 100))
+        painter.drawEllipse(QPointF(cx-2, cy-2), 4, 4)
+
+class Toast(QLabel):
+    def __init__(self, parent, text):
+        super().__init__(text, parent)
+        self.setFixedSize(160, 40)
+        self.setAlignment(Qt.AlignCenter)
+        
+        acc = theme_engine.current_palette.get('accent', '#2563eb')
+        bg = theme_engine.current_palette.get('main_bg', '#121212')
+        self.setStyleSheet(f"background: {bg}; color: {acc}; border: 1px solid {acc}; border-radius: 20px; font-weight: 800;")
+        
+        self.move((parent.width() - self.width()) // 2, (parent.height() - self.height()) // 2 - 50)
+        
+        self.op = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.op)
+        
+        self.fade_anim = QPropertyAnimation(self.op, b"opacity")
+        self.fade_anim.setDuration(1500)
+        self.fade_anim.setStartValue(1.0)
+        self.fade_anim.setEndValue(0.0)
+        self.fade_anim.setEasingCurve(QEasingCurve.InExpo)
+        self.fade_anim.finished.connect(self.deleteLater)
+        self.fade_anim.start()
+        self.show()
+
+class MagicToolbar(QFrame):
+    def __init__(self, parent, text):
+        super().__init__(parent)
+        self.text = text
+        self.setObjectName("MagicToolbar")
+        self.setFixedSize(220, 36)
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(5)
+        
+        # 1. Auto-Copy Checkbox/Toggle Button
+        self.is_auto = config.settings.get("ocr_auto_copy", True)
+        self.btn_auto = QPushButton("Auto-Copy: ON" if self.is_auto else "Auto-Copy: OFF")
+        self.btn_auto.setCheckable(True)
+        self.btn_auto.setChecked(self.is_auto)
+        self.btn_auto.setCursor(Qt.PointingHandCursor)
+        self.btn_auto.clicked.connect(self.toggle_auto)
+        
+        # 2. Manual Copy Button
+        self.btn_copy = QPushButton("Copy")
+        self.btn_copy.setCursor(Qt.PointingHandCursor)
+        self.btn_copy.clicked.connect(self.manual_copy)
+        
+        # 3. Close
+        self.btn_close = QPushButton("✕")
+        self.btn_close.setFixedSize(24, 24)
+        self.btn_close.setCursor(Qt.PointingHandCursor)
+        self.btn_close.clicked.connect(parent.hide_results)
+        
+        layout.addWidget(self.btn_auto)
+        layout.addWidget(self.btn_copy)
+        layout.addWidget(self.btn_close)
+        
+        acc = theme_engine.current_palette.get('accent', '#2563eb')
+        bg = theme_engine.current_palette.get('card_bg', '#1e1e1e')
+        text_color = theme_engine.current_palette.get('text_main', '#ffffff')
+        
+        self.setStyleSheet(f"""
+            #MagicToolbar {{
+                background: {bg};
+                border: 1px solid {acc};
+                border-radius: 12px;
+            }}
+            QPushButton {{
+                background: transparent;
+                color: {text_color};
+                font-size: 11px;
+                font-weight: bold;
+                border: none;
+                padding: 4px;
+            }}
+            QPushButton:hover {{ color: {acc}; }}
+            QPushButton:checked {{ color: {acc}; }}
+        """)
+
+    def toggle_auto(self):
+        self.is_auto = not self.is_auto
+        config.save_setting("ocr_auto_copy", self.is_auto)
+        self.btn_auto.setText("Auto-Copy: ON" if self.is_auto else "Auto-Copy: OFF")
+        if self.is_auto:
+            self.manual_copy()
+
+    def manual_copy(self):
+        import pyperclip
+        pyperclip.copy(self.text)
+        Toast(self.parent(), "Text Copied!")
 
 class OCRWindow(QWidget):
     def __init__(self, parent=None):
@@ -16,19 +219,38 @@ class OCRWindow(QWidget):
         
         self.progress = 0.0
         self.wave_phase = 0.0
+        self.shimmer_progress = 0.0
+        self.binary_particles = []
         self.original_pixmap = None
         self.blurred_pixmap = None
+        self.final_rect = None
+        self.final_text = ""
+        self.show_results = False
+        self.toolbar = None
+        self.result_overlay = None
+        self.indicator = None
         
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self.update_animation)
+        
+        self.shimmer_timer = QTimer(self)
+        self.shimmer_timer.timeout.connect(self.update_shimmer)
         
         acc = theme_engine.current_palette.get('accent', '#2563eb')
         self.base_color = QColor(acc)
         
         self.origin_x = 0
         self.origin_y = 0
+        self._result_opacity = 0.0
 
         self.setFocusPolicy(Qt.StrongFocus)
+
+    @pyqtProperty(float)
+    def result_opacity(self): return self._result_opacity
+    @result_opacity.setter
+    def result_opacity(self, v):
+        self._result_opacity = v
+        self.update()
 
     def set_origin(self, x, y):
         self.origin_x = x
@@ -60,6 +282,37 @@ class OCRWindow(QWidget):
         
         self.progress = 0.0
         self.wave_phase = 0.0
+        self.shimmer_progress = 0.0
+        self.final_rect = None
+        self.final_text = ""
+        self.show_results = False
+        self._result_opacity = 0.0
+        if self.toolbar:
+            self.toolbar.hide()
+            self.toolbar.deleteLater()
+            self.toolbar = None
+        if self.result_overlay:
+            self.result_overlay.hide()
+            self.result_overlay.deleteLater()
+            self.result_overlay = None
+            
+        # Initialize Indicator in top-right
+        if self.indicator:
+            self.indicator.deleteLater()
+        self.indicator = OCRIndicator(self)
+        margin = 30
+        self.indicator.move(self.width() - self.indicator.width() - margin, margin)
+        
+        # Fade-in for Indicator
+        op = QGraphicsOpacityEffect(self.indicator)
+        self.indicator.setGraphicsEffect(op)
+        self.ind_fade = QPropertyAnimation(op, b"opacity")
+        self.ind_fade.setDuration(500)
+        self.ind_fade.setStartValue(0.0)
+        self.ind_fade.setEndValue(1.0)
+        self.ind_fade.start()
+        self.indicator.show()
+
         self.anim_timer.start(16)
         self.setFocus()
         super().showEvent(e)
@@ -84,48 +337,116 @@ class OCRWindow(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and getattr(self, 'selection_start', None) is not None:
             self.selection_end = event.pos()
-            from PyQt5.QtCore import QRect
             rect = QRect(self.selection_start, self.selection_end).normalized()
             
             self.selection_start = None
             self.selection_end = None
-            self.update()
             
             if rect.width() > 10 and rect.height() > 10:
-                self.hide()
-                # Run OCR task after giving the window exactly enough time to fully hide
-                QTimer.singleShot(100, lambda: self.perform_ocr(rect))
+                self.final_rect = rect
+                if config.settings.get("magic_ocr_animation", True):
+                    self.shimmer_progress = 0.0
+                    self.shimmer_timer.start(16)
+                    # Start OCR in background while shimmer plays
+                    QTimer.singleShot(50, lambda: self.perform_ocr(rect))
+                else:
+                    self.perform_ocr(rect)
+            else:
+                self.update()
+
+    def update_shimmer(self):
+        self.shimmer_progress += 0.04 # Slower, more detailed animation
+        
+        # Generate binary particles for the cyberpunk effect
+        if self.final_rect and self.shimmer_progress < 1.0:
+            if len(self.binary_particles) < 30:
+                self.binary_particles.append({
+                    'x': random.randint(self.final_rect.left(), self.final_rect.right()),
+                    'y': random.randint(self.final_rect.top(), self.final_rect.bottom()),
+                    'char': random.choice(['0', '1']),
+                    'life': random.uniform(0.1, 0.4)
+                })
+        
+        if self.shimmer_progress >= 1.5:
+            self.shimmer_progress = 0.0
+            self.shimmer_timer.stop()
+            self.binary_particles = []
+        self.update()
+
+    def hide_results(self):
+        self.show_results = False
+        self.final_text = ""
+        if self.toolbar:
+            self.toolbar.hide()
+            self.toolbar.deleteLater()
+            self.toolbar = None
+        if self.result_overlay:
+            self.result_overlay.hide()
+            self.result_overlay.deleteLater()
+            self.result_overlay = None
+        self.hide()
 
     def perform_ocr(self, rect):
         from ocr.capture import capture_screen_rect
         from ocr.processing import process_image
-        from PyQt5.QtWidgets import QMessageBox
         try:
             img = capture_screen_rect(rect.x(), rect.y(), rect.width(), rect.height())
             text = process_image(img)
             
             if text:
-                msg = QMessageBox()
-                msg.setIcon(QMessageBox.Information)
-                msg.setWindowTitle("OCR Success")
-                msg.setText("Text copied to clipboard.")
-                msg.setWindowFlags(Qt.WindowStaysOnTopHint)
-                msg.exec_()
+                self.final_text = text
+                self.show_results = True
+                
+                # Position toolbar
+                tx = rect.x() + (rect.width() - 220) // 2
+                ty = rect.y() - 45 if rect.y() > 50 else rect.y() + rect.height() + 10
+                self.toolbar = MagicToolbar(self, text)
+                self.toolbar.move(tx, ty)
+                
+                # Setup Result Overlay (Scrollable)
+                self.result_overlay = ResultOverlay(self)
+                self.result_overlay.setGeometry(rect)
+                self.result_overlay.setPlainText(text)
+                
+                # Check for Auto-copy toast
+                if config.settings.get("ocr_auto_copy", True):
+                    Toast(self, "Auto-Copied!")
+                
+                # Sync Opacity
+                overlay_op = QGraphicsOpacityEffect(self.result_overlay)
+                self.result_overlay.setGraphicsEffect(overlay_op)
+                
+                toolbar_op = QGraphicsOpacityEffect(self.toolbar)
+                self.toolbar.setGraphicsEffect(toolbar_op)
+                
+                self.toolbar.show()
+                self.result_overlay.show()
+
+                # Unified Fade-in
+                self.fade_anim = QPropertyAnimation(self, b"result_opacity")
+                self.fade_anim.setDuration(400)
+                self.fade_anim.setStartValue(0.0)
+                self.fade_anim.setEndValue(1.0)
+                
+                self.tool_fade = QPropertyAnimation(toolbar_op, b"opacity")
+                self.tool_fade.setDuration(400)
+                self.tool_fade.setStartValue(0.0)
+                self.tool_fade.setEndValue(1.0)
+                
+                self.over_fade = QPropertyAnimation(overlay_op, b"opacity")
+                self.over_fade.setDuration(400)
+                self.over_fade.setStartValue(0.0)
+                self.over_fade.setEndValue(1.0)
+                
+                self.fade_anim.start()
+                self.tool_fade.start()
+                self.over_fade.start()
             else:
-                msg = QMessageBox()
-                msg.setIcon(QMessageBox.Warning)
-                msg.setWindowTitle("OCR Notice")
-                msg.setText("No text was detected in that region.")
-                msg.setWindowFlags(Qt.WindowStaysOnTopHint)
-                msg.exec_()
+                self.hide()
                 
         except Exception as e:
-            msg = QMessageBox()
-            msg.setIcon(QMessageBox.Critical)
-            msg.setWindowTitle("OCR Error")
-            msg.setText(f"OCR subsystem failed.\n\nError: {e}\n\nPlease install Tesseract OCR (tesseract-ocr.github.io).")
-            msg.setWindowFlags(Qt.WindowStaysOnTopHint)
-            msg.exec_()
+            print(f"OCR Error: {e}")
+            self.hide()
 
     def update_animation(self):
         speed = 0.015 * (1.0 - self.progress) + 0.01
@@ -197,19 +518,27 @@ class OCRWindow(QWidget):
         self.draw_ripple(painter, base_radius * 0.85, max_dist, normalize_fade)
         self.draw_ripple(painter, base_radius * 0.70, max_dist, normalize_fade)
 
-        if self.progress >= 1.0 and getattr(self, 'selection_start', None) is None:
-            # Add a dark drop shadow to the text so it's readable on any transparent background
-            font = painter.font()
-            font.setPointSize(28)
-            font.setBold(True)
-            painter.setFont(font)
+        if self.progress >= 0.8 and getattr(self, 'selection_start', None) is None:
+            # Modern UI: Minimalist Instruction Subtext
+            painter.setOpacity(max(0.0, (self.progress - 0.8) / 0.2))
             
             text_rect = self.rect()
-            painter.setPen(QColor(0, 0, 0, 180)) # Shadow
-            painter.drawText(text_rect.adjusted(2, 2, 2, 2), Qt.AlignCenter, "OCR Mode Active\nPress Esc or Right-click to exit")
             
-            painter.setPen(QColor(255, 255, 255, 220)) # Text
-            painter.drawText(text_rect, Qt.AlignCenter, "OCR Mode Active\nPress Esc or Right-click to exit")
+            # Instruction Subtext (Modern, sleek, demi-bold)
+            sub_font = QFont("Segoe UI", 10)
+            sub_font.setWeight(QFont.DemiBold)
+            sub_font.setLetterSpacing(QFont.AbsoluteSpacing, 1)
+            painter.setFont(sub_font)
+            
+            # Subtle shadow for clarity
+            painter.setPen(QColor(0, 0, 0, 80))
+            painter.drawText(text_rect.adjusted(1, 81, 1, 81), Qt.AlignCenter, "Drag to select area • Press ESC to exit")
+            
+            # Clean White Text
+            painter.setPen(QColor(255, 255, 255, 160))
+            painter.drawText(text_rect.adjusted(0, 80, 0, 80), Qt.AlignCenter, "Drag to select area • Press ESC to exit")
+            
+            painter.setOpacity(1.0)
 
         if getattr(self, 'selection_start', None) is not None:
             from PyQt5.QtCore import QRect
@@ -223,6 +552,65 @@ class OCRWindow(QWidget):
             painter.setPen(QPen(QColor(self.base_color), 2, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
+
+        # MAGIC SCAN SHIMMER & RESULT OVERLAY
+        if self.final_rect:
+            rect = self.final_rect
+            
+            # Clear background for the selected area
+            painter.setCompositionMode(QPainter.CompositionMode_Clear)
+            painter.fillRect(rect, Qt.transparent)
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+
+            # Draw "Magic Scan" effect (Advanced Cyberpunk Mode)
+            if self.shimmer_progress > 0 and self.shimmer_progress < 1.0:
+                pos = self.shimmer_progress
+                
+                # 1. Binary Digital Rain
+                painter.setPen(QColor(self.base_color.red(), self.base_color.green(), self.base_color.blue(), 150))
+                painter.setFont(QFont("Consolas", 10))
+                for p in self.binary_particles:
+                    painter.drawText(p['x'], p['y'], p['char'])
+
+                # 2. Dual Laser Scan Lines
+                painter.setPen(Qt.NoPen)
+                
+                # Main sharp line
+                grad1 = QLinearGradient(0, rect.top(), 0, rect.bottom())
+                grad1.setColorAt(max(0, pos-0.01), QColor(255, 255, 255, 0))
+                grad1.setColorAt(pos, QColor(255, 255, 255, 255))
+                grad1.setColorAt(min(1, pos+0.01), QColor(255, 255, 255, 0))
+                painter.setBrush(grad1)
+                painter.drawRect(rect.left(), int(rect.top() + rect.height()*pos)-1, rect.width(), 3)
+                
+                # Trailing wider glow
+                grad2 = QLinearGradient(0, rect.top(), 0, rect.bottom())
+                glow_pos = max(0, pos - 0.1)
+                grad2.setColorAt(max(0, glow_pos-0.1), QColor(self.base_color.red(), self.base_color.green(), self.base_color.blue(), 0))
+                grad2.setColorAt(glow_pos, QColor(self.base_color.red(), self.base_color.green(), self.base_color.blue(), 100))
+                grad2.setColorAt(min(1, glow_pos+0.1), QColor(self.base_color.red(), self.base_color.green(), self.base_color.blue(), 0))
+                painter.setBrush(grad2)
+                painter.drawRect(rect)
+
+                # 3. "SCANNING..." HUD
+                painter.setPen(QColor(255, 255, 255, 200))
+                painter.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                painter.drawText(rect.left() + 5, rect.top() + 15, "ANALYZING BYTES...")
+
+            # Draw Recognized Text Overlay Shell
+            if self.show_results and self.final_text:
+                painter.setOpacity(self._result_opacity)
+                
+                # Semi-transparent background for text area
+                painter.setBrush(QColor(0, 0, 0, 160))
+                painter.setPen(Qt.NoPen)
+                painter.drawRoundedRect(rect, 4, 4)
+                
+                # Glowing border
+                painter.setPen(QPen(self.base_color, 2))
+                painter.drawRoundedRect(rect, 4, 4)
+                
+                painter.setOpacity(1.0)
 
     def draw_ripple(self, painter, radius, max_dist, global_fade):
         if radius <= 0: return

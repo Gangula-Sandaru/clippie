@@ -24,7 +24,10 @@ def process_image(image):
     text = text.strip()
     
     if text:
-        pyperclip.copy(text)
+        from app_config import config
+        if config.settings.get("ocr_auto_copy", True):
+            pyperclip.copy(text)
+            
         add_item(text, manual_tag="OCR")
         return text
     else:

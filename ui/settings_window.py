@@ -144,20 +144,26 @@ class SettingsWindow(QWidget):
         def handle_float_toggle():
             state = float_sw.isChecked()
             config.save_setting("floating_widget", state)
-            
             from PyQt5.QtWidgets import QApplication
             from ui.starting_round_window import FloatingButton
-            
-            # Dynamically push visibility update without a restart
             for widget in QApplication.topLevelWidgets():
                 if isinstance(widget, FloatingButton):
-                    if state:
-                        widget.show()
-                    else:
-                        widget.hide()
+                    widget.show() if state else widget.hide()
             
         float_sw.clicked.connect(handle_float_toggle)
         self.s_layout.addWidget(SettingsCard("Enable Floating Button", "Show the quick access blue dot on screen.", float_sw))
+
+        # 3.6 Magic OCR Toggle
+        magic_sw = ToggleSwitch()
+        magic_sw.setChecked(config.settings.get("magic_ocr_animation", True))
+        magic_sw.clicked.connect(lambda: config.save_setting("magic_ocr_animation", magic_sw.isChecked()))
+        self.s_layout.addWidget(SettingsCard("Magic OCR Animations", "Enable shimmer and wave effects during capture.", magic_sw))
+
+        # 3.7 OCR Auto-Copy
+        autocopy_sw = ToggleSwitch()
+        autocopy_sw.setChecked(config.settings.get("ocr_auto_copy", True))
+        autocopy_sw.clicked.connect(lambda: config.save_setting("ocr_auto_copy", autocopy_sw.isChecked()))
+        self.s_layout.addWidget(SettingsCard("OCR Auto-Copy", "Instantly copy text on detection.", autocopy_sw))
 
         # 4. Shortcut Input
         hotkey = QLineEdit()
