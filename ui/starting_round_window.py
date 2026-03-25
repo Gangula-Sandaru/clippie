@@ -136,15 +136,13 @@ class FloatingButton(QWidget):
             from ui.ocr_window import OCRWindow
             self.ocr_window = OCRWindow()
         
-        screen = QApplication.primaryScreen().availableGeometry()
-        if self.x() + self.width() + self.ocr_window.width() + 10 <= screen.right():
-            target_x = self.x() + self.width() + 5
-        else:
-            target_x = self.x() - self.ocr_window.width() - 5
+        center_x = self.x() + self.width() // 2
+        center_y = self.y() + self.height() // 2
+        
+        if hasattr(self.ocr_window, 'set_origin'):
+            self.ocr_window.set_origin(center_x, center_y)
             
-        self.ocr_window.move(target_x, self.y() + 15)
         self.ocr_window.show()
-        QTimer.singleShot(3000, self.ocr_window.hide)
 
     def toggle_main_window_from_hotkey(self):
         if self.main_window.isVisible() and not getattr(self.main_window, '_is_hiding', False):
