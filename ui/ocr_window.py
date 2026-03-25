@@ -382,10 +382,22 @@ class OCRWindow(QWidget):
                 if config.settings.get("magic_ocr_animation", True):
                     self.shimmer_progress = 0.0
                     self.shimmer_timer.start(16)
+                    
+                    # Capture with DPI Correction
+                    ratio = QApplication.primaryScreen().devicePixelRatio()
+                    phys_rect = QRect(
+                        int(rect.x() * ratio), 
+                        int(rect.y() * ratio), 
+                        int(rect.width() * ratio), 
+                        int(rect.height() * ratio)
+                    )
+                    
                     # Start OCR in background while shimmer plays
-                    QTimer.singleShot(50, lambda: self.perform_ocr(rect))
+                    QTimer.singleShot(100, lambda pr=phys_rect, r=rect: self.perform_ocr_phys(pr, r))
                 else:
-                    self.perform_ocr(rect)
+                    ratio = QApplication.primaryScreen().devicePixelRatio()
+                    phys_rect = QRect(int(rect.x()*ratio), int(rect.y()*ratio), int(rect.width()*ratio), int(rect.height()*ratio))
+                    self.perform_ocr_phys(phys_rect, rect)
             else:
                 self.update()
 
@@ -421,26 +433,27 @@ class OCRWindow(QWidget):
             self.result_overlay = None
         self.hide()
 
-    def perform_ocr(self, rect):
+    def perform_ocr_phys(self, phys_rect, logical_rect):
         from ocr.capture import capture_screen_rect
         from ocr.processing import process_image
         try:
-            img = capture_screen_rect(rect.x(), rect.y(), rect.width(), rect.height())
+            # Capture the physical pixels
+            img = capture_screen_rect(phys_rect.x(), phys_rect.y(), phys_rect.width(), phys_rect.height())
             text = process_image(img)
             
             if text:
                 self.final_text = text
                 self.show_results = True
                 
-                # Position toolbar
-                tx = rect.x() + (rect.width() - 220) // 2
-                ty = rect.y() - 45 if rect.y() > 50 else rect.y() + rect.height() + 10
+                # Position toolbar based on logical coords
+                tx = logical_rect.x() + (logical_rect.width() - 220) // 2
+                ty = logical_rect.y() - 45 if logical_rect.y() > 50 else logical_rect.y() + logical_rect.height() + 10
                 self.toolbar = MagicToolbar(self, text)
                 self.toolbar.move(tx, ty)
                 
-                # Setup Result Overlay (Scrollable)
+                # Setup Result Overlay (Scrollable) at logical position
                 self.result_overlay = ResultOverlay(self)
-                self.result_overlay.setGeometry(rect)
+                self.result_overlay.setGeometry(logical_rect)
                 self.result_overlay.setPlainText(text)
                 
                 # Check for Auto-copy toast
