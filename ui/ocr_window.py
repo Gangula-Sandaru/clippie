@@ -1,7 +1,7 @@
 import sys
 import math
 from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QPushButton, QHBoxLayout, QFrame, QTextEdit, QGraphicsOpacityEffect
-from PyQt5.QtCore import Qt, QTimer, QPointF, QRect, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt5.QtCore import Qt, QTimer, QPointF, QRect, QRectF, QPropertyAnimation, QEasingCurve, pyqtProperty
 from PyQt5.QtGui import QPainter, QColor, QPainterPath, QPen, QFont, QLinearGradient, QBrush
 
 from themes.theme_manager import theme_engine
@@ -41,42 +41,66 @@ class ResultOverlay(QTextEdit):
 class OCRIndicator(QFrame):
     def __init__(self, parent):
         super().__init__(parent)
-        self.setFixedSize(280, 48)
+        self.setFixedSize(180, 40)
         self.morph_phase = 0.0
+        self.sparkles = []
         
-        # Styles
+        # Styles: Small, modern, fun glass-morphism
         acc = theme_engine.current_palette.get('accent', '#2563eb')
-        bg = "rgba(10, 10, 10, 220)"
+        bg = "rgba(10, 10, 10, 240)"
         self.setStyleSheet(f"""
             QFrame {{
                 background: {bg};
-                border: 1px solid {acc}66;
+                border: 1px solid rgba(255, 255, 255, 25);
                 border-radius: 20px;
             }}
         """)
         
-        self.layout = QHBoxLayout(self)
-        self.layout.setContentsMargins(15, 0, 15, 0)
-        self.layout.setSpacing(10)
+        # Adding a Luminous Halo (Drop Shadow Effect)
+        from PyQt5.QtWidgets import QGraphicsDropShadowEffect
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setColor(QColor(acc))
+        shadow.setOffset(0, 0)
+        self.setGraphicsEffect(shadow)
         
-        # Text Label
-        self.label = QLabel("OCR Mode On – Clippie")
-        self.label.setStyleSheet("color: white; font-family: 'Segoe UI'; font-size: 13px; font-weight: 600; background: transparent; border: none;")
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(12, 0, 12, 0)
+        self.layout.setSpacing(8)
+        
+        # Text Label: Fun & Modern
+        self.label = QLabel("Clippie Vision")
+        self.label.setStyleSheet("color: white; font-family: 'Segoe UI Semibold'; font-size: 11px; letter-spacing: 0.5px; background: transparent; border: none;")
         
         # Globe container for custom paint
         self.globe_widget = QWidget()
-        self.globe_widget.setFixedSize(30, 30)
+        self.globe_widget.setFixedSize(24, 24)
         self.globe_widget.paintEvent = self.paint_globe
         
         self.layout.addWidget(self.globe_widget)
         self.layout.addWidget(self.label)
         
         self.anim_timer = QTimer(self)
-        self.anim_timer.timeout.connect(self.update_morph)
+        self.anim_timer.timeout.connect(self.update_all)
         self.anim_timer.start(30)
 
-    def update_morph(self):
-        self.morph_phase += 0.05
+    def update_all(self):
+        self.morph_phase += 0.08
+        
+        # Handle Sparkles
+        if len(self.sparkles) < 5 and random.random() > 0.8:
+            self.sparkles.append({
+                'x': random.randint(0, 24),
+                'y': random.randint(0, 24),
+                'alpha': 255,
+                'size': random.uniform(0.5, 1.5)
+            })
+            
+        for s in self.sparkles[:]:
+            s['alpha'] -= 10
+            if s['alpha'] <= 0:
+                self.sparkles.remove(s)
+                
         self.globe_widget.update()
 
     def paint_globe(self, event):
@@ -84,16 +108,19 @@ class OCRIndicator(QFrame):
         painter.setRenderHint(QPainter.Antialiasing)
         
         acc = theme_engine.current_palette.get('accent', '#2563eb')
-        cx, cy = 15, 15
-        base_r = 10
+        cx, cy = 12, 12
+        
+        # Pulse Base Radius
+        pulse = 1.0 + 0.15 * math.sin(self.morph_phase * 0.5)
+        base_r = 7 * pulse
         
         path = QPainterPath()
         points = 8
         for i in range(points + 1):
             angle = (i / points) * 2 * math.pi
             # Organic deformation using multiple sine waves
-            offset = 2.5 * math.sin(angle * 2 + self.morph_phase)
-            offset += 1.5 * math.cos(angle * 3 - self.morph_phase * 0.7)
+            offset = 2.0 * math.sin(angle * 2 + self.morph_phase)
+            offset += 1.0 * math.cos(angle * 3 - self.morph_phase * 0.7)
             
             r = base_r + offset
             px = cx + r * math.cos(angle)
@@ -105,17 +132,25 @@ class OCRIndicator(QFrame):
         path.closeSubpath()
         
         # Glow & Gradient
-        grad = QLinearGradient(0, 0, 30, 30)
+        grad = QLinearGradient(0, 0, 24, 24)
         grad.setColorAt(0, QColor(acc))
-        grad.setColorAt(1, QColor(acc).lighter(150))
+        grad.setColorAt(1, QColor(acc).lighter(160))
         
         painter.setBrush(grad)
         painter.setPen(Qt.NoPen)
         painter.drawPath(path)
         
-        # Center core light
-        painter.setBrush(QColor(255, 255, 255, 100))
-        painter.drawEllipse(QPointF(cx-2, cy-2), 4, 4)
+        # Center core light (Living Pulsing Core)
+        # We can draw multiple layers for glow
+        painter.setBrush(QColor(255, 255, 255, int(150 * pulse)))
+        painter.drawEllipse(QPointF(cx-1.5, cy-1.5), 3, 3)
+        
+        # Draw Sparkles
+        for s in self.sparkles:
+            color = QColor(255, 255, 255, s['alpha'])
+            painter.setBrush(color)
+            painter.drawRect(QRectF(s['x'], s['y'], s['size'], s['size']))
+
 
 class Toast(QLabel):
     def __init__(self, parent, text):
