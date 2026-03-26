@@ -57,6 +57,21 @@ class OCRIndicator(QFrame):
         path.closeSubpath(); grad = QLinearGradient(0, 0, 24, 24); grad.setColorAt(0, QColor(acc)); grad.setColorAt(1, QColor(acc).lighter(160))
         painter.setBrush(grad); painter.setPen(Qt.NoPen); painter.drawPath(path)
         painter.setBrush(QColor(255, 255, 255, int(150 * pulse))); painter.drawEllipse(QPointF(cx-1.5, cy-1.5), 3, 3)
+        
+        for s in self.sparkles:
+            color = QColor(255, 255, 255, s['alpha'])
+            painter.setBrush(color); painter.setPen(Qt.NoPen)
+            star_path = QPainterPath()
+            sx, sy, size = s['x'], s['y'], s['size'] * 2.5
+            
+            # Draw a sleek 4-pointed star
+            star_path.moveTo(sx, sy - size)
+            star_path.quadTo(sx, sy, sx + size, sy)
+            star_path.quadTo(sx, sy, sx, sy + size)
+            star_path.quadTo(sx, sy, sx - size, sy)
+            star_path.quadTo(sx, sy, sx, sy - size)
+            
+            painter.drawPath(star_path)
 
 class Toast(QLabel):
     def __init__(self, parent, text):
