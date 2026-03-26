@@ -38,9 +38,12 @@ if __name__ == "__main__":
     # --- --- --- --- --- --- --- ---
 
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
-    from PyQt5.QtGui import QIcon
+    from PyQt5.QtGui import QIcon, QFont, QFontDatabase
 
     app = QApplication(sys.argv)
+    
+    # Use a standard, high-symbol-support font for the whole app
+    app.setFont(QFont("Segoe UI", 10))
     
     # Required for the system tray to keep running the app when all windows are closed
     app.setQuitOnLastWindowClosed(False)
@@ -85,6 +88,8 @@ if __name__ == "__main__":
                 border: 1px solid {p['card_border']};
                 border-radius: 8px;
                 padding: 5px;
+                font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Nirmala UI', system-ui, -apple-system, sans-serif;
+                letter-spacing: -0.1px;
             }}
             QMenu::item {{
                 background-color: transparent;

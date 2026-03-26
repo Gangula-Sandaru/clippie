@@ -29,6 +29,8 @@ def create_table():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # One-time migration: Merge HTML into Code
+    c.execute("UPDATE clipboard_items SET tag = 'Code' WHERE tag = 'HTML'")
     conn.commit()
     conn.close()
 
@@ -50,8 +52,8 @@ def add_item(content, manual_tag=None):
         elif content_strip.startswith(("http://", "https://", "www.")) or content_strip.endswith(
                 (".com", ".org", ".io", ".net")):
             tag = "URL"
-        # 3. Code Check
-        elif any(char in content for char in ["{", "}", "import ", "def ", "const ", "static ", "public class", "<html>"]):
+        # 3. Code & HTML Check (Consolidated)
+        elif any(char in content.lower() for char in ["<html>", "<!doctype html>", "</html>", "{", "}", "import ", "def ", "const ", "static ", "public class"]):
             tag = "Code"
 
     conn = get_connection()
@@ -151,6 +153,9 @@ def get_recent_items(limit=50, search_query=None, filter_type="ALL", mode="main"
         query += " AND tag = 'URL'"
     elif filter_type == "EMAIL":
         query += " AND tag = 'Email'"
+    elif filter_type == "HTML":
+        # Keep internal compatibility but map to Code
+        query += " AND tag = 'Code'"
     elif filter_type == "IMAGE":
         query += " AND tag = 'Image'"
 
