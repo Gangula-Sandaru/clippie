@@ -15,6 +15,9 @@ def is_activation_key_pressed():
         # 2. Check if that specific key is currently pressed
         return keyboard.is_pressed(saved_hotkey)
     except Exception as e:
-        # Fallback if the user enters an invalid key name
-        print(f"Invalid hotkey: {saved_hotkey}. Error: {e}")
+        # Safe logging using repr() to avoid UnicodeEncodeError with surrogates
+        try:
+            print(f"Invalid hotkey: {repr(saved_hotkey)}. Error: {repr(e)}")
+        except:
+            pass
         return False

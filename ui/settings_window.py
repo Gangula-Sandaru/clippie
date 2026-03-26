@@ -114,15 +114,18 @@ class SettingsWindow(QWidget):
         self.s_layout.addWidget(SettingsCard("Appearance", "Select your visual aesthetic.", theme_box))
 
         # 2. History Limit
-        limit_box = QComboBox()
-        limit_box.setObjectName("ModernCombo")
-        limit_box.setFixedWidth(240)
-        limit_box.addItems(["50 Records", "100 Records", "1000 Records", "Ultimate"])
-        limit_box.blockSignals(True)
-        limit_box.setCurrentText(config.settings.get("history_limit", "100 Records"))
-        limit_box.blockSignals(False)
-        limit_box.currentTextChanged.connect(lambda v: config.save_setting("history_limit", v))
-        self.s_layout.addWidget(SettingsCard("History Limit", "Automatically cleanup older clips.", limit_box))
+        self.limit_box = QComboBox()
+        self.limit_box.setObjectName("ModernCombo")
+        self.limit_box.setFixedWidth(240)
+        self.limit_box.addItems(["50 Records", "100 Records", "1000 Records", "Ultimate"])
+        
+        current_limit = config.settings.get("history_limit", "100 Records")
+        self.limit_box.blockSignals(True)
+        self.limit_box.setCurrentText(current_limit)
+        self.limit_box.blockSignals(False)
+        
+        self.limit_box.currentTextChanged.connect(self.handle_limit_change)
+        self.s_layout.addWidget(SettingsCard("History Limit", "Automatically cleanup older clips.", self.limit_box))
 
         # 3. Startup Toggle
         startup_sw = ToggleSwitch()
@@ -146,12 +149,18 @@ class SettingsWindow(QWidget):
             config.save_setting("floating_widget", state)
             from PyQt5.QtWidgets import QApplication
             from ui.starting_round_window import FloatingButton
+            
+            # Find or toggle existing floater
             for widget in QApplication.topLevelWidgets():
                 if isinstance(widget, FloatingButton):
-                    widget.show() if state else widget.hide()
+                    if state:
+                        widget.show()
+                        widget.raise_()
+                    else:
+                        widget.hide()
             
         float_sw.clicked.connect(handle_float_toggle)
-        self.s_layout.addWidget(SettingsCard("Enable Floating Button", "Show the quick access blue dot on screen.", float_sw))
+        self.s_layout.addWidget(SettingsCard("Floating Dashboard", "Quick access dot for your clipboard.", float_sw))
 
         # 3.6 Magic OCR Toggle
         magic_sw = ToggleSwitch()
@@ -165,13 +174,13 @@ class SettingsWindow(QWidget):
         autocopy_sw.clicked.connect(lambda: config.save_setting("ocr_auto_copy", autocopy_sw.isChecked()))
         self.s_layout.addWidget(SettingsCard("OCR Auto-Copy", "Instantly copy text on detection.", autocopy_sw))
 
-        # 4. Shortcut Input
-        hotkey = QLineEdit()
-        hotkey.setFixedWidth(240)
-        hotkey.setObjectName("ModernInput")
-        hotkey.setText(config.settings.get("hotkey", "alt"))
-        hotkey.editingFinished.connect(lambda: config.save_setting("hotkey", hotkey.text()))
-        self.s_layout.addWidget(SettingsCard("Global Shortcut", "Hotkey to toggle dashboard.", hotkey))
+        # 4. Shortcut Input (Modern Recorder)
+        from ui.components import HotkeyRecorder
+        p = theme_engine.current_palette
+        current_hk = config.settings.get("hotkey", "alt")
+        hotkey_rec = HotkeyRecorder(current_hk, p)
+        hotkey_rec.hotkey_changed.connect(lambda v: config.save_setting("hotkey", v))
+        self.s_layout.addWidget(SettingsCard("System Shortcut", "Press any key to change hotkey.", hotkey_rec))
 
         # 5. Cloud Sync Toggle
         cloud_sw = ToggleSwitch()
@@ -195,7 +204,47 @@ class SettingsWindow(QWidget):
         self.reset_btn.clicked.connect(self.handle_data_reset)
         self.s_layout.addWidget(SettingsCard("Danger Zone", "Irreversibly wipe all data.", self.reset_btn))
 
+        # 7. Keyboard Shortcuts (Collapsible)
+        from ui.components import ShortcutsCard
+        self.shortcuts_card = ShortcutsCard(theme_engine.current_palette)
+        self.s_layout.addSpacing(20)
+        self.s_layout.addWidget(self.shortcuts_card)
+
+        self.s_layout.addSpacing(30)
         self.s_layout.addStretch()
+
+    def handle_limit_change(self, new_val):
+        old_val = config.settings.get("history_limit", "100 Records")
+        
+        def get_num(s):
+            if s == "Ultimate": return 999999
+            try: return int(s.split()[0])
+            except: return 0
+            
+        if get_num(new_val) < get_num(old_val):
+            p = theme_engine.current_palette
+            dialog = ModernDialog(
+                "Downgrade Limit?",
+                f"Reducing limit to {new_val} may delete your oldest clips to save space. Proceed?",
+                p,
+                self
+            )
+            
+            # Center the dialog manually relative to the SettingsWindow
+            dialog.move(
+                self.x() + (self.width() - dialog.width()) // 2,
+                self.y() + (self.height() - dialog.height()) // 2
+            )
+            
+            if dialog.exec_():
+                config.save_setting("history_limit", new_val)
+            else:
+                # Revert visually without triggering signals
+                self.limit_box.blockSignals(True)
+                self.limit_box.setCurrentText(old_val)
+                self.limit_box.blockSignals(False)
+        else:
+            config.save_setting("history_limit", new_val)
 
     def handle_manual_sync(self):
         self.sync_btn.setText("Syncing...")
