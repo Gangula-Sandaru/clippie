@@ -225,6 +225,10 @@ class OCRWindow(QWidget):
         """Creates an 'Adaptive Mouse Bridge' that lets physical scroll events fall through natively."""
         try:
             import win32gui, win32api, win32con
+            
+            # Auto-clear the current scan box so the user has a clean view to scroll
+            self.clear_selection()
+            
             hwnd_self = int(self.winId())
             exstyle = win32gui.GetWindowLong(hwnd_self, win32con.GWL_EXSTYLE)
             
