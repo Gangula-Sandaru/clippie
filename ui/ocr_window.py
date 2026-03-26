@@ -200,7 +200,12 @@ class MagicToolbar(QFrame):
         self.btn_copy.setCursor(Qt.PointingHandCursor)
         self.btn_copy.clicked.connect(self.manual_copy)
         
-        # 3. Close
+        # 3. Retry Scan
+        self.btn_retry = QPushButton("Retry")
+        self.btn_retry.setCursor(Qt.PointingHandCursor)
+        self.btn_retry.clicked.connect(parent.clear_selection)
+        
+        # 4. Close
         self.btn_close = QPushButton("✕")
         self.btn_close.setFixedSize(24, 24)
         self.btn_close.setCursor(Qt.PointingHandCursor)
@@ -208,6 +213,7 @@ class MagicToolbar(QFrame):
         
         layout.addWidget(self.btn_auto)
         layout.addWidget(self.btn_copy)
+        layout.addWidget(self.btn_retry)
         layout.addWidget(self.btn_close)
         
         acc = theme_engine.current_palette.get('accent', '#2563eb')
@@ -360,6 +366,7 @@ class OCRWindow(QWidget):
         if event.button() == Qt.RightButton:
             self.hide()
         elif event.button() == Qt.LeftButton:
+            self.clear_selection()
             self.selection_start = event.pos()
             self.selection_end = event.pos()
             self.update()
@@ -420,9 +427,11 @@ class OCRWindow(QWidget):
             self.binary_particles = []
         self.update()
 
-    def hide_results(self):
+    def clear_selection(self):
         self.show_results = False
+        self.final_rect = None
         self.final_text = ""
+        self._result_opacity = 0.0
         if self.toolbar:
             self.toolbar.hide()
             self.toolbar.deleteLater()
@@ -431,6 +440,10 @@ class OCRWindow(QWidget):
             self.result_overlay.hide()
             self.result_overlay.deleteLater()
             self.result_overlay = None
+        self.update()
+
+    def hide_results(self):
+        self.clear_selection()
         self.hide()
 
     def perform_ocr_phys(self, phys_rect, logical_rect):
