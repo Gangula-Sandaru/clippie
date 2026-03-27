@@ -15,6 +15,8 @@ class ResultOverlay(QWidget):
         self.words = words
         self.ratio = ratio
         self.labels = []
+        self.origin_idx = -1
+        self.current_selected_indices = set()
         
         acc = theme_engine.current_palette.get('accent', '#2563eb')
         bg_color = "rgba(0, 0, 0, 180)"
@@ -31,7 +33,8 @@ class ResultOverlay(QWidget):
         
         for w in words:
             lbl = QLabel(w['text'], self)
-            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            # Remove default native selection so we can grab mouse events for rubberband
+            lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
             
             b, p, l = w.get('block_num', 0), w.get('par_num', 0), w.get('line_num', 0)
             line_m = line_metrics[(b, p, l)]
@@ -58,6 +61,102 @@ class ResultOverlay(QWidget):
                 }}
             """)
             self.labels.append(lbl)
+
+        self.sorted_labels = sorted(self.labels, key=lambda l: (round(l.y() / 10), l.x()))
+
+    def get_index_for_point(self, pt, strict=False):
+        if not self.sorted_labels: return -1
+        for i, lbl in enumerate(self.sorted_labels):
+            if lbl.geometry().contains(pt):
+                return i
+        if strict: return -1
+        
+        best_i = -1
+        min_dist = float('inf')
+        for i, lbl in enumerate(self.sorted_labels):
+            rect = lbl.geometry()
+            dx = max(rect.left() - pt.x(), 0, pt.x() - rect.right())
+            dy = max(rect.top() - pt.y(), 0, pt.y() - rect.bottom())
+            dist = dx*dx + dy*dy
+            if dist < min_dist:
+                min_dist = dist
+                best_i = i
+        return best_i
+
+    def _update_highlight(self):
+        for i, lbl in enumerate(self.sorted_labels):
+            if i in self.current_selected_indices:
+                if "235" not in lbl.styleSheet():
+                    lbl.setStyleSheet(lbl.styleSheet().replace("rgba(0, 0, 0, 180)", "rgba(37, 99, 235, 220)"))
+            else:
+                if "235" in lbl.styleSheet():
+                    lbl.setStyleSheet(lbl.styleSheet().replace("rgba(37, 99, 235, 220)", "rgba(0, 0, 0, 180)"))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.origin_idx = self.get_index_for_point(event.pos())
+            self.current_selected_indices = {self.origin_idx} if self.origin_idx != -1 else set()
+            self._update_highlight()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, 'origin_idx', -1) != -1:
+            end_idx = self.get_index_for_point(event.pos())
+            if end_idx != -1:
+                min_i, max_i = min(self.origin_idx, end_idx), max(self.origin_idx, end_idx)
+                self.current_selected_indices = set(range(min_i, max_i + 1))
+                self._update_highlight()
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if self.current_selected_indices:
+                idx_list = sorted(list(self.current_selected_indices))
+                text_parts = []
+                last_y_group = -1
+                for i in idx_list:
+                    lbl = self.sorted_labels[i]
+                    y_group = round(lbl.y() / 10)
+                    if last_y_group != -1 and y_group != last_y_group:
+                        text_parts.append("\\n")
+                    elif last_y_group != -1:
+                        text_parts.append(" ")
+                    text_parts.append(lbl.text())
+                    last_y_group = y_group
+                
+                selected_text = "".join(text_parts).strip()
+                if selected_text:
+                    pyperclip.copy(selected_text)
+                    Toast(self.parent(), "Selected Copied!")
+                
+                self.current_selected_indices.clear()
+                self._update_highlight()
+                
+            self.origin_idx = -1
+            event.accept()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            clicked_idx = self.get_index_for_point(event.pos(), strict=True)
+            if clicked_idx != -1:
+                target_lbl = self.sorted_labels[clicked_idx]
+                target_y_group = round(target_lbl.y() / 10)
+                
+                line_indices = [i for i, l in enumerate(self.sorted_labels) if round(l.y() / 10) == target_y_group]
+                self.current_selected_indices = set(line_indices)
+                self._update_highlight()
+                
+                text = " ".join([self.sorted_labels[i].text() for i in sorted(line_indices)]).strip()
+                if text:
+                    pyperclip.copy(text)
+                    Toast(self.parent(), "Line Copied!")
+                
+                QTimer.singleShot(300, self._clear_selection)
+            event.accept()
+            
+    def _clear_selection(self):
+        self.current_selected_indices.clear()
+        self._update_highlight()
 
 class OCRIndicator(QFrame):
     def __init__(self, parent):
