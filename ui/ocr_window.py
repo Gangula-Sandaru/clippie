@@ -9,15 +9,55 @@ from PyQt5.QtGui import QPainter, QColor, QPainterPath, QPen, QFont, QLinearGrad
 from themes.theme_manager import theme_engine
 from app_config import config
 
-class ResultOverlay(QTextEdit):
-    def __init__(self, parent):
+class ResultOverlay(QWidget):
+    def __init__(self, parent, words, ratio):
         super().__init__(parent)
-        self.setReadOnly(True)
-        self.setFrameStyle(QFrame.NoFrame)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.words = words
+        self.ratio = ratio
+        self.labels = []
+        
         acc = theme_engine.current_palette.get('accent', '#2563eb')
-        self.setStyleSheet(f"QTextEdit {{ background-color: transparent; color: white; font-family: 'Segoe UI'; font-size: 14px; padding: 10px; selection-background-color: {acc}; }}")
+        bg_color = "rgba(0, 0, 0, 180)"
+        
+        line_metrics = {}
+        for w in words:
+            b, p, l = w.get('block_num', 0), w.get('par_num', 0), w.get('line_num', 0)
+            key = (b, p, l)
+            if key not in line_metrics:
+                line_metrics[key] = {'max_h': w['height'], 'min_t': w['top']}
+            else:
+                line_metrics[key]['max_h'] = max(line_metrics[key]['max_h'], w['height'])
+                line_metrics[key]['min_t'] = min(line_metrics[key]['min_t'], w['top'])
+        
+        for w in words:
+            lbl = QLabel(w['text'], self)
+            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            
+            b, p, l = w.get('block_num', 0), w.get('par_num', 0), w.get('line_num', 0)
+            line_m = line_metrics[(b, p, l)]
+            
+            lx = max(0, int(w['left'] / ratio))
+            ly = max(0, int(line_m['min_t'] / ratio))
+            lw = max(1, int(w['width'] / ratio))
+            lh = max(1, int(line_m['max_h'] / ratio))
+            
+            pad = 2
+            lbl.setGeometry(lx - pad, ly - pad, lw + pad * 2, lh + pad * 2)
+            lbl.setAlignment(Qt.AlignCenter)
+            
+            font_size = max(8, int(lh * 0.8))
+            
+            lbl.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {bg_color};
+                    color: white;
+                    font-family: 'Segoe UI';
+                    font-size: {font_size}px;
+                    border-radius: 4px;
+                    selection-background-color: {acc};
+                }}
+            """)
+            self.labels.append(lbl)
 
 class OCRIndicator(QFrame):
     def __init__(self, parent):
@@ -186,19 +226,22 @@ class OCRWindow(QWidget):
     def hide_results(self): self.clear_selection(); self.hide()
 
     def perform_ocr_phys(self, phys_rect, logical_rect):
-        from ocr.capture import capture_screen_rect; from ocr.processing import process_image
+        from ocr.capture import capture_screen_rect; from ocr.processing import process_image_detailed
         try:
             img = capture_screen_rect(phys_rect.x(), phys_rect.y(), phys_rect.width(), phys_rect.height())
-            text = process_image(img)
+            text, words = process_image_detailed(img)
             if text:
                 self.final_text = text; self.show_results = True
                 self.toolbar = MagicToolbar(self, text); self.toolbar.move(logical_rect.x() + (logical_rect.width()-220)//2, logical_rect.y()-45 if logical_rect.y()>50 else logical_rect.y()+logical_rect.height()+10)
-                self.result_overlay = ResultOverlay(self); self.result_overlay.setGeometry(logical_rect); self.result_overlay.setPlainText(text)
+                ratio = QApplication.primaryScreen().devicePixelRatio()
+                self.result_overlay = ResultOverlay(self, words, ratio); self.result_overlay.setGeometry(logical_rect)
                 if config.settings.get("ocr_auto_copy", True): Toast(self, "Auto-Copied!")
                 self.toolbar.show(); self.result_overlay.show()
                 self.fade_anim = QPropertyAnimation(self, b"result_opacity"); self.fade_anim.setDuration(400); self.fade_anim.setStartValue(0.0); self.fade_anim.setEndValue(1.0); self.fade_anim.start()
             else: self.hide()
-        except: self.hide()
+        except Exception as e: 
+            print("OCR Error:", e)
+            self.hide()
 
     def update_animation(self):
         self.progress += 0.015 * (1.0 - self.progress) + 0.01
