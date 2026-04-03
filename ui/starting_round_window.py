@@ -44,6 +44,7 @@ class FloatingButton(QWidget):
     start_ocr_timer_signal = pyqtSignal()
     stop_ocr_timer_signal = pyqtSignal()
     ocr_activate_signal = pyqtSignal()
+    translate_activate_signal = pyqtSignal()
 
     def __init__(self, main_window):
         super().__init__()
@@ -60,6 +61,7 @@ class FloatingButton(QWidget):
         self.start_ocr_timer_signal.connect(self._start_ocr_timer)
         self.stop_ocr_timer_signal.connect(self._stop_ocr_timer)
         self.ocr_activate_signal.connect(self.activate_ocr_window)
+        self.translate_activate_signal.connect(self.activate_translate_window)
 
         self.ocr_timer = QTimer()
         self.ocr_timer.setSingleShot(True)
@@ -67,6 +69,7 @@ class FloatingButton(QWidget):
 
         keyboard.on_press_key("ctrl", self.on_ctrl_press)
         keyboard.on_release_key("ctrl", self.on_ctrl_release)
+        keyboard.add_hotkey("ctrl+t", self.translate_activate_signal.emit)
         keyboard.on_release_key("esc", self.on_esc_release)
         self.double_ctrl_signal.connect(self.toggle_main_window_from_hotkey)
         self.esc_signal.connect(self.hide_main_window_from_esc)
@@ -143,6 +146,19 @@ class FloatingButton(QWidget):
             self.ocr_window.set_origin(center_x, center_y)
             
         self.ocr_window.show()
+
+    def activate_translate_window(self):
+        if not hasattr(self, 'translate_window'):
+            from translate.translate_window import TranslateWindow
+            self.translate_window = TranslateWindow()
+        
+        center_x = self.x() + self.width() // 2
+        center_y = self.y() + self.height() // 2
+        
+        if hasattr(self.translate_window, 'set_origin'):
+            self.translate_window.set_origin(center_x, center_y)
+            
+        self.translate_window.show()
 
     def toggle_main_window_from_hotkey(self):
         if self.main_window.isVisible() and not getattr(self.main_window, '_is_hiding', False):

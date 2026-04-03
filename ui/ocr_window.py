@@ -64,6 +64,10 @@ class ResultOverlay(QWidget):
 
         self.sorted_labels = sorted(self.labels, key=lambda l: (round(l.y() / 10), l.x()))
 
+    def scroll_content(self, dy):
+        for lbl in self.labels:
+            lbl.move(lbl.x(), lbl.y() + dy)
+
     def get_index_for_point(self, pt, strict=False):
         if not self.sorted_labels: return -1
         for i, lbl in enumerate(self.sorted_labels):
@@ -121,13 +125,24 @@ class ResultOverlay(QWidget):
                         text_parts.append("\\n")
                     elif last_y_group != -1:
                         text_parts.append(" ")
-                    text_parts.append(lbl.text())
+                    text_parts.append(lbl.property("original_text") or lbl.text())
                     last_y_group = y_group
                 
                 selected_text = "".join(text_parts).strip()
                 if selected_text:
-                    pyperclip.copy(selected_text)
-                    Toast(self.parent(), "Selected Copied!")
+                    parent = self.parent()
+                    if hasattr(parent, 'update_translation'):
+                        from translate.translate_processing import translate_text
+                        target_lang = "auto"
+                        if hasattr(parent, 'current_lang_code'):
+                            target_lang = parent.current_lang_code
+                        elif hasattr(parent, 'lang_combo'):
+                            target_lang = parent.lang_combo.currentText()
+                        translated = translate_text(selected_text, target_lang=target_lang, auto_copy=False)
+                        parent.update_translation(translated)
+                    else:
+                        pyperclip.copy(selected_text)
+                        Toast(parent, "Selected Copied!")
                 
                 self.current_selected_indices.clear()
                 self._update_highlight()
@@ -146,10 +161,21 @@ class ResultOverlay(QWidget):
                 self.current_selected_indices = set(line_indices)
                 self._update_highlight()
                 
-                text = " ".join([self.sorted_labels[i].text() for i in sorted(line_indices)]).strip()
+                text = " ".join([self.sorted_labels[i].property("original_text") or self.sorted_labels[i].text() for i in sorted(line_indices)]).strip()
                 if text:
-                    pyperclip.copy(text)
-                    Toast(self.parent(), "Line Copied!")
+                    parent = self.parent()
+                    if hasattr(parent, 'update_translation'):
+                        from translate.translate_processing import translate_text
+                        target_lang = "auto"
+                        if hasattr(parent, 'current_lang_code'):
+                            target_lang = parent.current_lang_code
+                        elif hasattr(parent, 'lang_combo'):
+                            target_lang = parent.lang_combo.currentText()
+                        translated = translate_text(text, target_lang=target_lang, auto_copy=False)
+                        parent.update_translation(translated)
+                    else:
+                        pyperclip.copy(text)
+                        Toast(parent, "Line Copied!")
                 
                 QTimer.singleShot(300, self._clear_selection)
             event.accept()
