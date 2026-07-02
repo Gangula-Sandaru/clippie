@@ -29,6 +29,8 @@ def create_table():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # One-time migration: Merge HTML into Code
+    c.execute("UPDATE clipboard_items SET tag = 'Code' WHERE tag = 'HTML'")
     conn.commit()
     conn.close()
 
@@ -50,8 +52,8 @@ def add_item(content, manual_tag=None):
         elif content_strip.startswith(("http://", "https://", "www.")) or content_strip.endswith(
                 (".com", ".org", ".io", ".net")):
             tag = "URL"
-        # 3. Code Check
-        elif any(char in content for char in ["{", "}", "import ", "def ", "const ", "static ", "public class", "<html>"]):
+        # 3. Code & HTML Check (Consolidated)
+        elif any(char in content.lower() for char in ["<html>", "<!doctype html>", "</html>", "{", "}", "import ", "def ", "const ", "static ", "public class"]):
             tag = "Code"
 
     conn = get_connection()
@@ -66,6 +68,8 @@ def add_item(content, manual_tag=None):
     c.execute("INSERT INTO clipboard_items (content, tag) VALUES (?, ?)", (content, tag))
     conn.commit()
     conn.close()
+
+    enforce_database_limits()
 
 
 def toggle_favorite(item_id, status):
@@ -149,6 +153,9 @@ def get_recent_items(limit=50, search_query=None, filter_type="ALL", mode="main"
         query += " AND tag = 'URL'"
     elif filter_type == "EMAIL":
         query += " AND tag = 'Email'"
+    elif filter_type == "HTML":
+        # Keep internal compatibility but map to Code
+        query += " AND tag = 'Code'"
     elif filter_type == "IMAGE":
         query += " AND tag = 'Image'"
 
@@ -164,33 +171,33 @@ def get_recent_items(limit=50, search_query=None, filter_type="ALL", mode="main"
 
 def enforce_database_limits():
     """
-    1. Removes data older than 30 days.
-    2. Enforces the 'History Limit' from config.settings.
+    1. Removes data older than 30 days (for all plans, including Ultimate).
+    2. Enforces the 'History Limit' from config.settings for numeric limits.
     """
     # Parse History Limit from config (e.g., "100 Records" -> 100)
     limit_str = config.settings.get("history_limit", "100 Records")
-    if "Unlimited" in limit_str:
-        max_rows = 5000  # Safety cap to prevent memory issues
-    else:
-        try:
-            max_rows = int(limit_str.split()[0])
-        except (ValueError, IndexError):
-            max_rows = 100
+    is_ultimate = "Ultimate" in limit_str or "Unlimited" in limit_str
 
     with get_connection() as conn:
-        # A. Delete items older than 30 days
+        # A. Delete items older than 30 days for ALL plans
         conn.execute("DELETE FROM clipboard_items WHERE timestamp < datetime('now', '-30 days')")
 
         # B. Delete items exceeding the numerical limit (keeping Favorites)
-        # We use a subquery to find IDs that are NOT in the 'Top N' most recent
-        conn.execute("""
-            DELETE FROM clipboard_items 
-            WHERE id NOT IN (
-                SELECT id FROM clipboard_items 
-                ORDER BY timestamp DESC 
-                LIMIT ?
-            )
-        """, (max_rows,))
+        if not is_ultimate:
+            try:
+                max_rows = int(limit_str.split()[0])
+            except (ValueError, IndexError):
+                max_rows = 100
+
+            conn.execute("""
+                DELETE FROM clipboard_items 
+                WHERE id NOT IN (
+                    SELECT id FROM clipboard_items 
+                    ORDER BY timestamp DESC 
+                    LIMIT ?
+                )
+            """, (max_rows,))
+            
         conn.commit()
 
 

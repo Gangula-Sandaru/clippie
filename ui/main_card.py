@@ -185,15 +185,20 @@ class ClipboardItemWidget(QFrame):
             }}
             QLabel#ContentLabel {{ 
                 color: {p['text_main']}; 
+                font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
                 font-size: 15px; 
-                font-weight: 500; 
+                font-weight: 400; 
                 padding: 10px 0px; 
+                letter-spacing: -0.1px;
             }}
             QLabel#TimeLabel {{ 
                 color: {p['text_dim']}; 
+                font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
                 font-size: 12px; 
+                letter-spacing: -0.1px;
             }}
             [objectName^="Tag"] {{ 
+                font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
                 font-size: 10px; 
                 font-weight: 800; 
                 letter-spacing: 0.5px;

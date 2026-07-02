@@ -26,7 +26,9 @@ class ConfigManager:
             "startup": True,
             "hotkey": "alt",
             "first_run": True,
-            "floating_widget": True
+            "floating_widget": True,
+            "magic_ocr_animation": True,
+            "ocr_auto_copy": True
         }
         self.settings = self.load_settings()
 

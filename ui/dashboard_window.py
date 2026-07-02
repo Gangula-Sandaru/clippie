@@ -390,6 +390,9 @@ class HistoryWindow(QWidget):
 
         # 3. APPLY CSS
         self.setStyleSheet(f"""
+            QWidget {{ 
+                font-family: 'Segoe UI', 'Segoe UI Symbol', 'Segoe UI Emoji', sans-serif; 
+            }}
             #MainShell {{ background: {p['main_bg']}; border-radius: {radius}px; border: 1px solid {p['card_border']}; }}
             #Sidebar {{ background: {p['card_bg']}; border-right: 1px solid {p['card_border']}; border-top-left-radius: {radius}px; border-bottom-left-radius: {radius}px; }}
             #SidebarLogo {{ color: {p['accent']}; font-size: 20px; font-weight: 900; letter-spacing: 5px; }}
@@ -405,6 +408,16 @@ class HistoryWindow(QWidget):
             #WinControl, #WinClose {{ background: transparent; color: {p['text_main']}; border: none; }}
             #WinControl:hover {{ background: {p['widget_bg']}; }}
             #WinClose:hover {{ background: #e81123; color: white; border-top-right-radius: {radius}px; }}
+
+            #FavBtn, #EditBtn, #CopyBtn, #DelBtn {{ 
+                background-color: transparent; 
+                border: 1px solid transparent; 
+                border-radius: 10px; 
+                color: {p['text_dim']}44; 
+                font-family: 'Segoe UI Symbol', 'Segoe UI Emoji', 'Segoe UI', sans-serif;
+                font-size: 18px; 
+                outline: none;
+            }}
 
             #ModernSearch {{
                 background: transparent;

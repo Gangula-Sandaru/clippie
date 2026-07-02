@@ -6,11 +6,16 @@ from PIL import ImageGrab
 from db.database import add_item
 from app_config import get_writable_path
 
+from PyQt5.QtCore import QObject, pyqtSignal
+
 last_ui_copy = None
 last_ui_image_hash = None
 
-class ClipboardMonitor:
+class ClipboardMonitor(QObject):
+    item_added = pyqtSignal()
+
     def __init__(self):
+        super().__init__()
         self.last_clipboard = ""
         self.last_image_hash = ""
         self.is_paused = False
@@ -50,6 +55,7 @@ class ClipboardMonitor:
                         img.save(filepath, "PNG")
                         
                         add_item(filepath, manual_tag="Image")
+                        self.item_added.emit()
                         self.last_image_hash = img_hash
                         self.last_clipboard = "" # clear text check
                     
@@ -61,6 +67,7 @@ class ClipboardMonitor:
                         if isinstance(file_path, str) and file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.ico')):
                             if file_path != self.last_clipboard:
                                 add_item(file_path, manual_tag="Image")
+                                self.item_added.emit()
                                 self.last_clipboard = file_path
                                 self.last_image_hash = "" # clear image data check
                     time.sleep(0.5)
@@ -73,6 +80,7 @@ class ClipboardMonitor:
                         self.last_clipboard = text
                         continue
                     add_item(text)
+                    self.item_added.emit()
                     self.last_clipboard = text
                     self.last_image_hash = "" # clear image check
                     
