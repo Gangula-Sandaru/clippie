@@ -15,8 +15,10 @@ def set_startup(enabled=True):
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
 
         if enabled:
-            # We put 'Clippie' inside that address
-            app_path = f'"{os.path.realpath(sys.argv[0])}"'
+            if getattr(sys, 'frozen', False):
+                app_path = f'"{os.path.realpath(sys.executable)}" --autostart'
+            else:
+                app_path = f'"{os.path.realpath(sys.executable)}" "{os.path.realpath(sys.argv[0])}" --autostart'
             winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, app_path)
         else:
             # We remove 'Clippie' from that address
