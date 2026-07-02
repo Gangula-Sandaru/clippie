@@ -44,9 +44,32 @@ if __name__ == "__main__":
 
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
     from PyQt5.QtGui import QIcon
+    from PyQt5.QtNetwork import QLocalSocket, QLocalServer
 
     app = QApplication(sys.argv)
     
+    # --- SINGLE INSTANCE ENFORCEMENT ---
+    socket = QLocalSocket()
+    socket.connectToServer("ClippieSingleInstance")
+    is_already_running = False
+    
+    if socket.waitForConnected(500):
+        # We connected. Send SHOW command.
+        socket.write(b"SHOW")
+        socket.waitForBytesWritten(500)
+        
+        # Wait for the first instance to acknowledge it's alive
+        if socket.waitForReadyRead(1000):
+            if socket.readAll().data() == b"ACK":
+                is_already_running = True
+                
+    if is_already_running:
+        sys.exit(0)
+        
+    # We are the first instance (or the previous one crashed and didn't ACK)
+    server = QLocalServer()
+    QLocalServer.removeServer("ClippieSingleInstance")
+    server.listen("ClippieSingleInstance")
     # Required for the system tray to keep running the app when all windows are closed
     app.setQuitOnLastWindowClosed(False)
 
@@ -63,10 +86,17 @@ if __name__ == "__main__":
         onboarding = OnboardingWindow()
         onboarding.exec_()
 
-    # Open the Dashboard automatically by default on launch
+    # Sync startup state with registry on boot
+    from utils.startup_manager import set_startup
+    is_startup_enabled = config.settings.get("startup", True)
+    set_startup(is_startup_enabled)
+
+    # Open the Dashboard automatically by default on launch, unless launched on boot
     from ui.dashboard_window import HistoryWindow
-    main_win.dashboard_win = HistoryWindow(parent_window=main_win)
-    main_win.dashboard_win.show()
+    main_win.dashboard_win = None
+    if "--autostart" not in sys.argv:
+        main_win.dashboard_win = HistoryWindow(parent_window=main_win)
+        main_win.dashboard_win.show()
 
     # --- SYSTEM TRAY SETUP ---
     tray = QSystemTrayIcon(QIcon(resource_path("assets/icon.ico")), app)
@@ -110,10 +140,24 @@ if __name__ == "__main__":
     
     open_action = QAction("Open Dashboard")
     def open_dash():
-        if main_win.dashboard_win is None or not main_win.dashboard_win.isVisible():
+        if getattr(main_win, 'dashboard_win', None) is None or not main_win.dashboard_win.isVisible():
             main_win.dashboard_win = HistoryWindow(parent_window=main_win)
         main_win.dashboard_win.show()
+        main_win.dashboard_win.raise_()
+        main_win.dashboard_win.activateWindow()
     open_action.triggered.connect(open_dash)
+    
+    def on_new_connection():
+        conn = server.nextPendingConnection()
+        if conn.waitForReadyRead(500):
+            msg = conn.readAll().data()
+            if msg == b"SHOW":
+                conn.write(b"ACK")
+                conn.waitForBytesWritten(500)
+                open_dash()
+        conn.disconnectFromServer()
+        
+    server.newConnection.connect(on_new_connection)
     
     pause_action = QAction("Pause Tracking")
     def toggle_pause():
