@@ -5,9 +5,20 @@ from datetime import datetime
 
 # Get the absolute path for the database file
 from app_config import config, get_writable_path
+from utils.logger import logger
+from utils.encryption import encrypt, decrypt
 
 # Use the same AppData folder as the config
 DB_PATH = get_writable_path("clipboard.db")
+
+# ---------------------------------------------------------------------------
+# SQL injection guard: ORDER BY values are never interpolated from user input.
+# Only these two string literals are ever placed in the query.
+# ---------------------------------------------------------------------------
+_ALLOWED_ORDER = {
+    "dashboard": "is_favorite DESC, timestamp DESC",
+    "main":      "timestamp DESC",
+}
 
 
 def get_connection():
@@ -56,14 +67,16 @@ def add_item(content, manual_tag=None):
 
     conn = get_connection()
     c = conn.cursor()
-    # Optional: Avoid saving the exact same content twice in a row
+    # Optional: Avoid saving the exact same content twice in a row.
+    # Decrypt the stored value before comparing with the incoming plaintext.
     c.execute("SELECT content FROM clipboard_items ORDER BY timestamp DESC LIMIT 1")
     last = c.fetchone()
-    if last and last[0] == content:
+    if last and decrypt(last[0]) == content:
         conn.close()
         return
 
-    c.execute("INSERT INTO clipboard_items (content, tag) VALUES (?, ?)", (content, tag))
+    # Encrypt content before persisting
+    c.execute("INSERT INTO clipboard_items (content, tag) VALUES (?, ?)", (encrypt(content), tag))
     conn.commit()
     conn.close()
 
@@ -86,10 +99,12 @@ def delete_item(item_id):
     conn.commit()
     conn.close()
 
+
 def update_item(item_id, new_content):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE clipboard_items SET content = ? WHERE id = ?", (new_content, item_id))
+    # Encrypt the updated content before saving
+    c.execute("UPDATE clipboard_items SET content = ? WHERE id = ?", (encrypt(new_content), item_id))
     conn.commit()
     conn.close()
 
@@ -116,29 +131,27 @@ def delete_oldest_items(n):
         conn.commit()
 
 
-def get_recent_items(limit=50, search_query=None, filter_type="ALL", mode="main"):
+def get_recent_items(limit=50, offset=0, search_query=None, filter_type="ALL", mode="main"):
     """
     Unified fetcher for the premium dashboard.
     Handles searching, category filtering, and sorting modes.
+
+    Because content is stored encrypted, SQL LIKE cannot search it directly.
+    When a search_query is provided all category-filtered rows are fetched and
+    then filtered in Python after decryption. For a capped dataset (≤ 5 000
+    rows) this is fast enough to be imperceptible to the user.
     """
     conn = get_connection()
     c = conn.cursor()
 
-    # 1. Sorting Logic
-    # Favorites first if in dashboard mode, otherwise strictly by time
-    order_logic = "is_favorite DESC, timestamp DESC" if mode == "dashboard" else "timestamp DESC"
+    # 1. Sorting Logic — use allowlist, never interpolate user-controlled values
+    order_logic = _ALLOWED_ORDER.get(mode, "timestamp DESC")
 
-    # 2. Build Query Dynamically
-    # Using 'WHERE 1=1' allows us to append 'AND' clauses easily
-    query = f"SELECT id, content, tag, is_favorite, timestamp FROM clipboard_items WHERE 1=1"
+    # 2. Build base query.  'WHERE 1=1' lets us append AND clauses cleanly.
+    query = "SELECT id, content, tag, is_favorite, timestamp FROM clipboard_items WHERE 1=1"
     params = []
 
-    # Filter by Search
-    if search_query and search_query.strip():
-        query += " AND content LIKE ?"
-        params.append(f"%{search_query}%")
-
-    # Filter by Category (Matching the UI Chip IDs)
+    # Filter by Category — operates on unencrypted tag / is_favorite columns
     if filter_type == "FAVORITES":
         query += " AND is_favorite = 1"
     elif filter_type == "TEXT":
@@ -152,14 +165,31 @@ def get_recent_items(limit=50, search_query=None, filter_type="ALL", mode="main"
     elif filter_type == "IMAGE":
         query += " AND tag = 'Image'"
 
-    # Finalize Query
-    query += f" ORDER BY {order_logic} LIMIT ?"
-    params.append(limit)
+    query += f" ORDER BY {order_logic}"
 
-    c.execute(query, params)
-    items = c.fetchall()
-    conn.close()
-    return items
+    if search_query and search_query.strip():
+        # Fetch all category-filtered rows; filter on decrypted content in Python
+        c.execute(query, params)
+        rows = c.fetchall()
+        conn.close()
+
+        needle = search_query.strip().lower()
+        matched = []
+        for row in rows:
+            decrypted_content = decrypt(row[1])
+            if needle in decrypted_content.lower():
+                matched.append((row[0], decrypted_content, row[2], row[3], row[4]))
+
+        # Apply pagination manually
+        return matched[offset: offset + limit]
+    else:
+        # No search query — use efficient DB-level LIMIT / OFFSET
+        query += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        c.execute(query, params)
+        rows = c.fetchall()
+        conn.close()
+        return [(row[0], decrypt(row[1]), row[2], row[3], row[4]) for row in rows]
 
 
 def enforce_database_limits():
@@ -181,8 +211,7 @@ def enforce_database_limits():
         # A. Delete items older than 30 days
         conn.execute("DELETE FROM clipboard_items WHERE timestamp < datetime('now', '-30 days')")
 
-        # B. Delete items exceeding the numerical limit (keeping Favorites)
-        # We use a subquery to find IDs that are NOT in the 'Top N' most recent
+        # B. Delete items exceeding the numerical limit (keeping newest)
         conn.execute("""
             DELETE FROM clipboard_items 
             WHERE id NOT IN (
@@ -208,7 +237,7 @@ def get_time_ago(timestamp_str):
         if seconds < 86400: return f"{seconds // 3600}h ago"
         return f"{diff.days}d ago"
     except Exception as e:
-        print(f"Time error: {e}")
+        logger.error("get_time_ago failed for '%s': %s", timestamp_str, e)
         return "Recent"
 
 
@@ -224,13 +253,13 @@ def get_total_count():
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            # Use the correct table name: clipboard_items
             cursor.execute("SELECT COUNT(*) FROM clipboard_items")
             count = cursor.fetchone()[0]
             return count
     except Exception as e:
-        print(f"Database Count Error: {e}")
+        logger.error("Database Count Error: %s", e)
         return 0
+
 
 def get_category_counts():
     """Returns a dict of counts for each category and favorites."""
@@ -240,15 +269,15 @@ def get_category_counts():
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM clipboard_items")
             counts["ALL"] = cursor.fetchone()[0]
-            
+
             cursor.execute("SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 1")
             counts["FAVORITES"] = cursor.fetchone()[0]
-            
+
             cursor.execute("SELECT tag, COUNT(*) FROM clipboard_items GROUP BY tag")
             for row in cursor.fetchall():
                 tag = str(row[0]).upper()
                 if tag in counts:
                     counts[tag] = row[1]
     except Exception as e:
-        print(f"Database Category Count Error: {e}")
+        logger.error("Database Category Count Error: %s", e)
     return counts

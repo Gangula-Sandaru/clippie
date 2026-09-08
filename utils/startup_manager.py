@@ -1,6 +1,7 @@
 import winreg
 import os
 import sys
+from utils.logger import logger
 
 
 def set_startup(enabled=True):
@@ -20,12 +21,14 @@ def set_startup(enabled=True):
             else:
                 app_path = f'"{os.path.realpath(sys.executable)}" "{os.path.realpath(sys.argv[0])}" --autostart'
             winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, app_path)
+            logger.info("Windows startup registry entry set to: %s", app_path)
         else:
             # We remove 'Clippie' from that address
             try:
                 winreg.DeleteValue(key, app_name)
+                logger.info("Windows startup registry entry removed.")
             except FileNotFoundError:
                 pass
         winreg.CloseKey(key)
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error("Failed to configure startup entry: %s", e, exc_info=True)

@@ -201,7 +201,8 @@ class SettingsWindow(QWidget):
             
         def on_error(err):
             self.sync_btn.setText("Sync Failed!")
-            print(f"Cloud Sync Error: {err}")
+            from utils.logger import logger
+            logger.error("Cloud Sync Error: %s", err)
             QTimer.singleShot(2000, lambda: self.reset_sync_button())
             
         sync_data_to_cloud(on_success, on_error)

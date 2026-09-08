@@ -33,6 +33,9 @@ class HistoryWindow(QWidget):
         self._margin = 10  # Slightly larger hit-box for easier grabbing
         self.current_filter = "ALL"
         self.settings_window = None
+        self.current_offset = 0
+        self.is_loading = False
+        self.has_more = True
 
         # 3. MAIN LAYOUT
         self.main_layout = QVBoxLayout(self)
@@ -157,6 +160,7 @@ class HistoryWindow(QWidget):
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setObjectName("ContentScroll")
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.verticalScrollBar().valueChanged.connect(self.on_scroll)
 
         self.container = QWidget()
         self.container.setObjectName("ScrollContainer")
@@ -315,11 +319,24 @@ class HistoryWindow(QWidget):
             btn.setChecked(name == filter_name)
         self.refresh_items()
 
+    def on_scroll(self, value):
+        if self.is_loading or not self.has_more:
+            return
+            
+        scrollbar = self.scroll.verticalScrollBar()
+        # Load more when reaching the bottom (with a small buffer)
+        if value >= scrollbar.maximum() - 50:
+            self.load_more_items()
+
     def refresh_items(self):
         """
         Clears the current view and repopulates cards from the database.
         Called on filter change, search change, or card action (star/delete).
         """
+        self.current_offset = 0
+        self.has_more = True
+        self.is_loading = True
+
         from db.database import get_category_counts
         counts = get_category_counts()
         for icon, f_id, f_name in getattr(self, 'base_filters', []):
@@ -329,14 +346,15 @@ class HistoryWindow(QWidget):
         # 1. Clear existing cards safely
         while self.cards_layout.count():
             item = self.cards_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+            if item.widget():
+                item.widget().deleteLater()
 
         # 2. Fetch fresh items from DB
         search_term = self.search.text()
+        limit = 50
         items = get_recent_items(
-            limit=40,
+            limit=limit,
+            offset=self.current_offset,
             search_query=search_term,
             filter_type=self.current_filter,
             mode="dashboard"  # Keeps favorites at top
@@ -361,12 +379,66 @@ class HistoryWindow(QWidget):
                     content=i[1],
                     parent=self,  # Crucial for auto-refresh
                     p=p,
-                    delay_ms=idx * 40
+                    delay_ms=idx * 10
                 )
                 self.cards_layout.addWidget(card)
+            
+            self.current_offset += len(items)
+            if len(items) < limit:
+                self.has_more = False
 
         # 4. Add a stretch at the end to keep cards aligned to top
         self.cards_layout.addStretch()
+        self.is_loading = False
+
+    def load_more_items(self):
+        if self.is_loading or not self.has_more:
+            return
+            
+        self.is_loading = True
+        
+        search_term = self.search.text()
+        limit = 50
+        items = get_recent_items(
+            limit=limit,
+            offset=self.current_offset,
+            search_query=search_term,
+            filter_type=self.current_filter,
+            mode="dashboard"
+        )
+        
+        if not items:
+            self.has_more = False
+            self.is_loading = False
+            return
+            
+        # Remove stretch at the end before adding new items
+        if self.cards_layout.count() > 0:
+            last_item = self.cards_layout.itemAt(self.cards_layout.count() - 1)
+            if last_item.spacerItem():
+                self.cards_layout.removeItem(last_item)
+                
+        p = theme_engine.current_palette
+        
+        for idx, i in enumerate(items):
+            card = ClipboardCard(
+                item_id=i[0],
+                category=i[2],
+                is_fav=i[3],
+                time_ago=get_time_ago(i[4]),
+                content=i[1],
+                parent=self,
+                p=p,
+                delay_ms=0
+            )
+            self.cards_layout.addWidget(card)
+            
+        self.current_offset += len(items)
+        if len(items) < limit:
+            self.has_more = False
+            
+        self.cards_layout.addStretch()
+        self.is_loading = False
 
     def apply_theme(self, p):
         radius = 0 if self.isMaximized() else 15
