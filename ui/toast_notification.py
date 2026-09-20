@@ -79,7 +79,6 @@ class SensitiveToastNotification(QWidget):
         text_layout.addWidget(self.title_lbl)
         text_layout.addWidget(self.msg_lbl)
         main_layout.addLayout(text_layout, 1)
-
         # Close button
         self.close_btn = QPushButton("✕")
         self.close_btn.setFixedSize(20, 20)
