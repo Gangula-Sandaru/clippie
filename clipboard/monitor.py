@@ -3,42 +3,26 @@ import re
 import time
 import os
 import hashlib
+import ctypes
 from PIL import ImageGrab
 from db.database import add_item
 from app_config import get_writable_path
 from utils.logger import logger
+from clipboard.sensitive_detector import detect_sensitive, is_sensitive
+from utils.notifier import notifier
 
 last_ui_copy = None
 last_ui_image_hash = None
 
-# ---------------------------------------------------------------------------
-# Sensitive-content filter (Critical fix #2)
-# ---------------------------------------------------------------------------
-_SENSITIVE_PATTERNS = [
-    # Credit / debit card numbers — Visa, Mastercard, Amex, Discover
-    re.compile(
-        r'\b(?:'
-        r'4[0-9]{12}(?:[0-9]{3})?'           # Visa (13 or 16 digits)
-        r'|5[1-5][0-9]{14}'                   # Mastercard
-        r'|3[47][0-9]{13}'                    # American Express
-        r'|6(?:011|5[0-9]{2})[0-9]{12}'      # Discover
-        r')\b'
-    ),
-    # PEM / OpenSSH private key headers
-    re.compile(r'-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----'),
-    re.compile(r'-----BEGIN PGP PRIVATE KEY BLOCK-----'),
-]
 
-
-def is_sensitive(text: str) -> bool:
-    """
-    Return True if the text matches any known sensitive-data pattern.
-    Content flagged here is NOT saved to the clipboard history database.
-    """
-    for pattern in _SENSITIVE_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+def get_clipboard_sequence():
+    """Returns the Windows clipboard sequence number, or None on other platforms."""
+    try:
+        if os.name == 'nt':
+            return ctypes.windll.user32.GetClipboardSequenceNumber()
+    except Exception:
+        pass
+    return None
 
 
 class ClipboardMonitor:
@@ -46,6 +30,7 @@ class ClipboardMonitor:
         self.last_clipboard = ""
         self.last_image_hash = ""
         self.is_paused = False
+        self.last_sequence = get_clipboard_sequence()
 
     def run(self):
         global last_ui_copy, last_ui_image_hash
@@ -58,8 +43,15 @@ class ClipboardMonitor:
         while True:
             try:
                 if getattr(self, 'is_paused', False):
-                    time.sleep(0.5)
+                    time.sleep(0.3)
                     continue
+
+                current_sequence = get_clipboard_sequence()
+                # On Windows, if sequence hasn't changed, no new copy event occurred
+                if current_sequence is not None and self.last_sequence is not None:
+                    if current_sequence == self.last_sequence:
+                        time.sleep(0.25)
+                        continue
 
                 # 1. Check for image
                 img = ImageGrab.grabclipboard()
@@ -69,13 +61,14 @@ class ClipboardMonitor:
                         img = img.convert('RGB')
 
                     img_byte_arr = img.tobytes()
-                    # SHA-256 instead of MD5 (Medium fix #7)
                     img_hash = hashlib.sha256(img_byte_arr).hexdigest()
 
                     if img_hash != self.last_image_hash:
                         if img_hash == last_ui_image_hash:
                             self.last_image_hash = img_hash
-                            time.sleep(0.5)
+                            if current_sequence is not None:
+                                self.last_sequence = current_sequence
+                            time.sleep(0.3)
                             continue
 
                         filename = f"img_{img_hash}.png"
@@ -86,7 +79,9 @@ class ClipboardMonitor:
                         self.last_image_hash = img_hash
                         self.last_clipboard = ""  # clear text check
 
-                    time.sleep(0.5)
+                    if current_sequence is not None:
+                        self.last_sequence = current_sequence
+                    time.sleep(0.3)
                     continue
                 elif isinstance(img, list) and len(img) > 0:
                     # File(s) copied (path list), not image data directly
@@ -97,29 +92,52 @@ class ClipboardMonitor:
                                 add_item(file_path, manual_tag="Image")
                                 self.last_clipboard = file_path
                                 self.last_image_hash = ""  # clear image data check
-                    time.sleep(0.5)
+                    if current_sequence is not None:
+                        self.last_sequence = current_sequence
+                    time.sleep(0.3)
                     continue
 
                 # 2. Check for text
                 text = pyperclip.paste()
-                if text and text != self.last_clipboard:
+                if text:
                     if text == last_ui_copy:
                         self.last_clipboard = text
+                        if current_sequence is not None:
+                            self.last_sequence = current_sequence
+                        time.sleep(0.3)
                         continue
 
-                    # Security: skip content matching sensitive patterns
-                    if is_sensitive(text):
-                        logger.info("Sensitive content detected — skipping history save.")
+                    # Security: check for sensitive patterns
+                    has_sensitive, sensitive_type = detect_sensitive(text)
+                    if has_sensitive:
+                        category = sensitive_type or "Sensitive Data"
+                        logger.info("Sensitive content detected (%s) — routing to separate encrypted vault.", category)
                         self.last_clipboard = text
-                        time.sleep(0.5)
+                        if current_sequence is not None:
+                            self.last_sequence = current_sequence
+
+                        # Save to isolated encrypted vault file (never saved to normal clipboard.db)
+                        from utils.vault_storage import add_vault_item
+                        add_vault_item(text, category=category)
+
+                        # Always emit notification, even if the user copied the exact same sensitive item again
+                        notifier.emit_sensitive(
+                            category,
+                            f"Detected {category}. Saved securely to encrypted Vault file."
+                        )
+                        time.sleep(0.3)
                         continue
 
-                    add_item(text)
-                    self.last_clipboard = text
-                    self.last_image_hash = ""  # clear image check
+                    if text != self.last_clipboard:
+                        add_item(text)
+                        self.last_clipboard = text
+                        self.last_image_hash = ""  # clear image check
 
-                time.sleep(0.5)
+                if current_sequence is not None:
+                    self.last_sequence = current_sequence
+
+                time.sleep(0.3)
             except Exception as e:
                 # High fix #4: log exceptions instead of silently discarding them
                 logger.error("Clipboard monitor error: %s", e, exc_info=True)
-                time.sleep(0.5)
+                time.sleep(0.3)

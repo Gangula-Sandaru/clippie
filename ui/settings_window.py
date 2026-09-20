@@ -1,7 +1,8 @@
 import pyperclip
 from PyQt5.QtWidgets import (QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QLabel, QScrollArea, QComboBox, QLineEdit, QMessageBox)
-from PyQt5.QtCore import Qt, QTimer
+                             QLabel, QScrollArea, QComboBox, QLineEdit, QMessageBox,
+                             QFileDialog, QInputDialog)
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal
 from PyQt5.QtGui import QCursor
 
 from app_config import config
@@ -12,6 +13,12 @@ from ui.dashboard_window import HistoryWindow
 from ui.dialog_window import ModernDialog
 from utils.startup_manager import set_startup
 from utils.cloud_sync import sync_data_to_cloud
+
+
+class _UpdateSignals(QObject):
+    """Thread-safe bridge: background thread emits → Qt thread receives."""
+    update_found = pyqtSignal(str, str, str)   # (latest_version, download_url, release_notes)
+    up_to_date   = pyqtSignal()
 
 
 class SettingsWindow(QWidget):
@@ -102,6 +109,44 @@ class SettingsWindow(QWidget):
     def add_rows(self):
         """Populate settings and connect them to the config and system logic."""
 
+        # ── 0. Software Update ────────────────────────────────────────────────
+        self._update_signals = _UpdateSignals()
+        self._update_signals.update_found.connect(self._on_update_found)
+        self._update_signals.up_to_date.connect(self._on_up_to_date)
+        self._pending_download_url = None
+
+        # Row container widget
+        self._update_widget = QFrame()
+        self._update_widget.setObjectName("UpdateBanner")
+        update_layout = QHBoxLayout(self._update_widget)
+        update_layout.setContentsMargins(0, 0, 0, 0)
+        update_layout.setSpacing(12)
+
+        self._update_status_lbl = QLabel("Checking for updates…")
+        self._update_status_lbl.setObjectName("UpdateStatusLabel")
+        update_layout.addWidget(self._update_status_lbl)
+
+        self._install_btn = QPushButton("Install Update")
+        self._install_btn.setObjectName("ActionButton")
+        self._install_btn.setFixedSize(180, 45)
+        self._install_btn.setCursor(Qt.PointingHandCursor)
+        self._install_btn.hide()
+        self._install_btn.clicked.connect(self._on_install_clicked)
+        update_layout.addWidget(self._install_btn)
+
+        self.s_layout.addWidget(
+            SettingsCard("Software Update", "Keep Clippie up to date automatically.", self._update_widget)
+        )
+
+        # Kick off background check
+        from utils.updater import check_for_update_async
+        check_for_update_async(
+            on_update_found=lambda info: self._update_signals.update_found.emit(
+                info.latest_version, info.download_url, info.release_notes
+            ),
+            on_up_to_date=lambda: self._update_signals.up_to_date.emit(),
+        )
+
         # 1. Appearance
         theme_box = QComboBox()
         theme_box.setObjectName("ModernCombo")
@@ -181,7 +226,15 @@ class SettingsWindow(QWidget):
         self.sync_btn.clicked.connect(self.handle_manual_sync)
         self.s_layout.addWidget(SettingsCard("Manual Sync", "Force backup to the server now.", self.sync_btn))
 
-        # 5. Danger Zone
+        # 7. Export Encrypted Vault (Separate File)
+        self.export_btn = QPushButton("Export Vault")
+        self.export_btn.setObjectName("ActionButton")
+        self.export_btn.setFixedSize(180, 45)
+        self.export_btn.setCursor(Qt.PointingHandCursor)
+        self.export_btn.clicked.connect(self.handle_export_vault)
+        self.s_layout.addWidget(SettingsCard("Export Encrypted Vault", "Save separate password-encrypted vault backup.", self.export_btn))
+
+        # 8. Danger Zone
         self.reset_btn = QPushButton("Clean all data")
         self.reset_btn.setObjectName("DeleteButton")
         self.reset_btn.setFixedSize(180, 45)
@@ -190,6 +243,61 @@ class SettingsWindow(QWidget):
         self.s_layout.addWidget(SettingsCard("Danger Zone", "Irreversibly wipe all data.", self.reset_btn))
 
         self.s_layout.addStretch()
+
+    # ── Update Handlers ───────────────────────────────────────────────────────
+
+    def _on_update_found(self, latest_version: str, download_url: str, notes: str):
+        """Called (on Qt thread via signal) when a newer version is detected."""
+        from app_config import APP_VERSION
+        self._pending_download_url = download_url
+
+        p = theme_engine.current_palette
+        self._update_status_lbl.setText(
+            f"⬆  Version {latest_version} is available  (you have {APP_VERSION})"
+        )
+        self._update_status_lbl.setStyleSheet(
+            f"color: {p['accent']}; font-size: 15px; font-weight: 600; background: transparent;"
+        )
+        self._install_btn.show()
+
+    def _on_up_to_date(self):
+        """Called (on Qt thread via signal) when already on the latest version."""
+        from app_config import APP_VERSION
+        p = theme_engine.current_palette
+        self._update_status_lbl.setText(f"✓  You're up to date  (v{APP_VERSION})")
+        self._update_status_lbl.setStyleSheet(
+            f"color: {p.get('success', '#9ece6a')}; font-size: 15px; font-weight: 500; background: transparent;"
+        )
+        self._install_btn.hide()
+
+    def _on_install_clicked(self):
+        """Download and install the update when the user clicks the button."""
+        if not self._pending_download_url:
+            return
+
+        self._install_btn.setText("Downloading…")
+        self._install_btn.setEnabled(False)
+
+        def on_progress(pct: int):
+            # Progress callback runs on the downloader thread – post to Qt thread via signal trick
+            QTimer.singleShot(0, lambda: self._install_btn.setText(f"Downloading… {pct}%"))
+
+        def on_done():
+            QTimer.singleShot(0, lambda: self._install_btn.setText("Launching installer…"))
+
+        def on_error(msg: str):
+            QTimer.singleShot(0, lambda: (
+                self._install_btn.setText("Download Failed"),
+                QMessageBox.critical(self, "Update Failed", f"Could not download update:\n{msg}"),
+            ))
+
+        from utils.updater import download_and_install
+        download_and_install(
+            download_url=self._pending_download_url,
+            progress_callback=on_progress,
+            done_callback=on_done,
+            error_callback=on_error,
+        )
 
     def handle_manual_sync(self):
         self.sync_btn.setText("Syncing...")
@@ -210,6 +318,36 @@ class SettingsWindow(QWidget):
     def reset_sync_button(self):
         self.sync_btn.setText("Sync Now")
         self.sync_btn.setEnabled(True)
+
+    def handle_export_vault(self):
+        from utils.vault_storage import export_vault, get_vault_count
+        count = get_vault_count()
+        if count == 0:
+            QMessageBox.information(self, "Vault Empty", "There are no sensitive items in the Secure Vault to export.")
+            return
+
+        passphrase, ok = QInputDialog.getText(
+            self, "Encrypt Export File",
+            "Enter a password to encrypt this standalone vault file:",
+            QLineEdit.Password
+        )
+        if not ok or not passphrase.strip():
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Encrypted Vault File", "clippie_vault_backup.clpvlt",
+            "Clippie Vault (*.clpvlt);;All Files (*)"
+        )
+        if file_path:
+            try:
+                export_vault(file_path, passphrase.strip())
+                QMessageBox.information(
+                    self, "Export Successful",
+                    f"Successfully saved {count} encrypted vault item(s) to:\n{file_path}\n\n"
+                    "This file is encrypted with AES-256-GCM and protected by your password."
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Export Failed", f"Failed to export vault: {e}")
 
     def handle_data_reset(self):
         """Replaces QMessageBox with your new ModernDialog."""
@@ -232,6 +370,11 @@ class SettingsWindow(QWidget):
         # If user clicks DELETE (self.accept())
         if dialog.exec_():
             clear_all_data()
+            try:
+                from utils.vault_storage import clear_vault
+                clear_vault()
+            except Exception:
+                pass
             refresh = HistoryWindow()
             refresh.refresh_items()
             self.reset_btn.setText("Data Wiped!")

@@ -8,12 +8,14 @@ from ui.dialog_window import ModernDialog
 
 
 class ClipboardCard(QFrame):
-    def __init__(self, item_id, category, is_fav, time_ago, content, parent, p, delay_ms=0):
+    def __init__(self, item_id, category, is_fav, time_ago, content, parent, p, delay_ms=0, is_vault=False, masked=None):
         super().__init__(parent.container if hasattr(parent, 'container') else parent)
         self.parent_window = parent
         self.item_id = item_id
         self.content = content
         self.is_fav = bool(is_fav)
+        self.is_vault = bool(is_vault)
+        self.masked = masked
         self.expanded = False
         self.p = p
 
@@ -25,7 +27,7 @@ class ClipboardCard(QFrame):
         self.main_layout.setSpacing(8)
 
         header = QHBoxLayout()
-        self.category = str(category).upper() if category else "TEXT"
+        self.category = str(category).upper() if category else ("VAULT" if self.is_vault else "TEXT")
         self.tag = QLabel(self.category)
         self.tag.setObjectName(f"Tag{self.category}")
         self.time_lbl = QLabel(time_ago)
@@ -44,8 +46,9 @@ class ClipboardCard(QFrame):
         self.btn_copy.clicked.connect(self.copy_me)
         self.btn_delete.clicked.connect(self.delete_me)
 
-        header.addWidget(self.btn_fav)
-        header.addWidget(self.btn_edit)
+        if not self.is_vault:
+            header.addWidget(self.btn_fav)
+            header.addWidget(self.btn_edit)
         header.addWidget(self.btn_copy)
         header.addWidget(self.btn_delete)
         self.main_layout.addLayout(header)
@@ -55,18 +58,18 @@ class ClipboardCard(QFrame):
         self.content_lbl.setWordWrap(True)
         self.main_layout.addWidget(self.content_lbl)
 
-        self.hint = QLabel("Show More ↓")
+        self.hint = QLabel("Show More ↓" if not self.is_vault else "Show Secret ↓")
         self.hint.setObjectName("TimeLabel")
         self.main_layout.addWidget(self.hint)
 
         self.update_content()
         self.apply_styles(p)
 
-        self.hide()
         if delay_ms > 0:
+            self.hide()
             QTimer.singleShot(delay_ms, self.show)
         else:
-            QTimer.singleShot(5, self.show)
+            self.show()
 
     def _create_action_btn(self, icon, obj_name, glow_color):
         btn = QPushButton(icon)
@@ -129,9 +132,10 @@ class ClipboardCard(QFrame):
                     self.parent_window.refresh_items()
 
     def delete_me(self):
+        msg = "This secret item will be permanently removed from your encrypted vault." if self.is_vault else "This item will be permanently removed from your history."
         dialog = ModernDialog(
             "Confirm Action",
-            "This item will be permanently removed from your history.",
+            msg,
             self.p,
             self.parent_window
         )
@@ -144,7 +148,11 @@ class ClipboardCard(QFrame):
 
         if dialog.exec_():
             if dialog.result_status:
-                delete_item(self.item_id)
+                if self.is_vault:
+                    from utils.vault_storage import delete_vault_item
+                    delete_vault_item(self.item_id)
+                else:
+                    delete_item(self.item_id)
                 if hasattr(self.parent_window, "refresh_items"):
                     self.parent_window.refresh_items()
 
@@ -176,6 +184,15 @@ class ClipboardCard(QFrame):
         QTimer.singleShot(1000, lambda: self.btn_copy.setText("❐"))
 
     def update_content(self):
+        if self.is_vault:
+            if self.expanded:
+                self.content_lbl.setText(self.content)
+                self.hint.setText("Hide Secret ↑")
+            else:
+                self.content_lbl.setText(self.masked or "••••••••••••")
+                self.hint.setText("Show Secret ↓")
+            return
+
         if getattr(self, 'category', '') == "IMAGE":
             from PyQt5.QtGui import QPixmap
             pixmap = QPixmap(self.content)

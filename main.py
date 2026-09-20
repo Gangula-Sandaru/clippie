@@ -8,7 +8,7 @@ from themes.theme_manager import theme_engine
 
 from ui.main_window import MainWindow
 from ui.starting_round_window import FloatingButton
-from db.database import create_table
+from db.database import create_table, ensure_indexes
 from clipboard.monitor import ClipboardMonitor
 
 
@@ -27,6 +27,7 @@ def resource_path(relative_path):
 if __name__ == "__main__":
     # Initialize Database
     create_table()
+    ensure_indexes()  # Add performance indexes (safe no-op if already present)
 
     # --- SETTINGS INITIALIZATION ---
     # Load the theme saved in config.json and apply it to the engine
@@ -45,6 +46,13 @@ if __name__ == "__main__":
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
     from PyQt5.QtGui import QIcon
     from PyQt5.QtNetwork import QLocalSocket, QLocalServer
+
+    if sys.platform == "win32":
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("clippie.clipboard.manager.app")
+        except Exception:
+            pass
 
     app = QApplication(sys.argv)
     
@@ -181,6 +189,57 @@ if __name__ == "__main__":
             open_dash()
             
     tray.activated.connect(on_tray_activated)
+    # --- SENSITIVE DATA NOTIFICATION HANDLER ---
+    from utils.notifier import notifier
+    from ui.toast_notification import show_sensitive_toast
+
+    def on_sensitive_detected(category, message):
+        msg = message or f"Detected {category}. Clippie prevented saving this to history."
+        # 1. Floating visual on-screen toast (visible across all apps and Windows states)
+        try:
+            show_sensitive_toast(category, msg)
+        except Exception as e:
+            from utils.logger import logger
+            logger.error("Failed to show toast notification: %s", e)
+
+        # 2. System tray notification (Windows Action Center)
+        try:
+            tray.showMessage(
+                "Clippie — Sensitive Data Shield",
+                msg,
+                QSystemTrayIcon.Warning,
+                4000
+            )
+        except Exception as e:
+            from utils.logger import logger
+            logger.error("Failed to show tray notification: %s", e)
+
+    notifier.sensitive_detected.connect(on_sensitive_detected)
+
     tray.show()
+
+    # -- STARTUP UPDATE CHECK --
+    # Fires 5 s after launch so the UI is fully ready first.
+    def _startup_update_check():
+        from utils.updater import check_for_update_async
+        from app_config import APP_VERSION
+
+        def on_update_found(info):
+            try:
+                tray.showMessage(
+                    "Clippie " + info.latest_version + " is available",
+                    "Open Settings > Software Update to install. (You have v" + APP_VERSION + ")",
+                    QSystemTrayIcon.Information,
+                    6000
+                )
+            except Exception as exc:
+                from utils.logger import logger
+                logger.error("Update tray notification failed: %s", exc)
+
+        check_for_update_async(on_update_found=on_update_found)
+
+    from PyQt5.QtCore import QTimer as _QTimer
+    _QTimer.singleShot(5000, _startup_update_check)
+    # -----------------------------------------------------------------------
 
     sys.exit(app.exec_())

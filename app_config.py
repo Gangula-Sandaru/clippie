@@ -5,6 +5,11 @@ import sys
 
 from utils.logger import logger
 
+# ── App Version ──────────────────────────────────────────────────────────────
+# Single source of truth.  Keep this in sync with clippie.iss MyAppVersion
+# and the git tag you push to trigger a release (e.g. git tag v1.1).
+APP_VERSION = "1.1"
+
 
 def get_writable_path(filename):
     """Redirects files to the user's AppData folder for Windows compatibility."""
