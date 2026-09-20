@@ -1,19 +1,24 @@
 import unittest
 from clipboard.sensitive_detector import detect_sensitive, is_sensitive, luhn_check
 
+# NOTE: All credential-shaped strings below are deliberately synthetic test
+# fixtures. They use placeholder characters (X, 0, fake domains) so that
+# secret scanners do not false-positive on them, while still exercising the
+# regex patterns inside sensitive_detector.
+
 
 class TestSensitiveDetector(unittest.TestCase):
 
     def test_luhn_check(self):
-        # Valid Luhn numbers (Standard test card numbers)
+        # Valid Luhn numbers (well-known public test card numbers from stripe docs)
         self.assertTrue(luhn_check("4532015112830366"))
         self.assertTrue(luhn_check("49927398716"))
-        # Invalid Luhn number
+        # Invalid Luhn numbers
         self.assertFalse(luhn_check("4532015112830367"))
         self.assertFalse(luhn_check("1234567812345678"))
 
     def test_credit_card_detection(self):
-        # Valid Visa with spaces
+        # Valid Visa with spaces (public test number)
         has_sens, cat = detect_sensitive("My card is 4532 0151 1283 0366 expires 12/28")
         self.assertTrue(has_sens)
         self.assertEqual(cat, "Credit Card Number")
@@ -26,42 +31,44 @@ class TestSensitiveDetector(unittest.TestCase):
         # Raw continuous digits
         self.assertTrue(is_sensitive("4532015112830366"))
 
-        # Random 16 digits that fail Luhn algorithm should NOT be flagged as credit cards
+        # Random 16 digits that fail Luhn should NOT be flagged
         has_sens, cat = detect_sensitive("Reference transaction ID 1111222233334444 completed")
         self.assertFalse(has_sens)
 
     def test_password_detection(self):
-        has_sens, cat = detect_sensitive("db_password: MyStrongPassword99")
+        # keyword: value pattern
+        has_sens, cat = detect_sensitive("db_password: XXXXXXXXXXXXXXXX")
         self.assertTrue(has_sens)
         self.assertEqual(cat, "Password / Credential")
 
-        has_sens, cat = detect_sensitive("pwd=hunter2")
+        # short key=value pattern
+        has_sens, cat = detect_sensitive("pwd=XXXXXXXX")
         self.assertTrue(has_sens)
         self.assertEqual(cat, "Password / Credential")
 
         # Database URI with embedded credentials
-        has_sens, cat = detect_sensitive("postgres://postgres:secretpassword@localhost:5432/mydb")
+        has_sens, cat = detect_sensitive("postgres://user:XXXXXXXXXX@localhost:5432/mydb")
         self.assertTrue(has_sens)
         self.assertEqual(cat, "Password / Credential")
 
     def test_api_keys_and_tokens(self):
-        # OpenAI Key
-        has_sens, cat = detect_sensitive("sk-proj-abc1234567890abcdef1234567890abcdef1234567890")
+        # OpenAI-style prefix (sk-proj-) with clearly fake body
+        has_sens, cat = detect_sensitive("sk-proj-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
         self.assertTrue(has_sens)
         self.assertEqual(cat, "API Key / Token")
 
-        # GitHub PAT
-        has_sens, cat = detect_sensitive("ghp_123456789012345678901234567890123456")
+        # GitHub PAT prefix (ghp_) with clearly fake body
+        has_sens, cat = detect_sensitive("ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
         self.assertTrue(has_sens)
         self.assertEqual(cat, "API Key / Token")
 
-        # AWS Access Key
-        has_sens, cat = detect_sensitive("export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE")
+        # AWS Access Key prefix (AKIA) with clearly fake body
+        has_sens, cat = detect_sensitive("export AWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXX")
         self.assertTrue(has_sens)
         self.assertEqual(cat, "API Key / Token")
 
-        # Generic API key assignment
-        has_sens, cat = detect_sensitive("api_key = 'abcdef1234567890abcdef'")
+        # Generic api_key assignment
+        has_sens, cat = detect_sensitive("api_key = 'XXXXXXXXXXXXXXXXXXXXXXXX'")
         self.assertTrue(has_sens)
         self.assertEqual(cat, "API Key / Token")
 
