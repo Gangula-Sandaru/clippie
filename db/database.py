@@ -5,9 +5,20 @@ from datetime import datetime
 
 # Get the absolute path for the database file
 from app_config import config, get_writable_path
+from utils.logger import logger
+from utils.encryption import encrypt, decrypt
 
 # Use the same AppData folder as the config
 DB_PATH = get_writable_path("clipboard.db")
+
+# ---------------------------------------------------------------------------
+# SQL injection guard: ORDER BY values are never interpolated from user input.
+# Only these two string literals are ever placed in the query.
+# ---------------------------------------------------------------------------
+_ALLOWED_ORDER = {
+    "dashboard": "is_favorite DESC, timestamp DESC",
+    "main":      "timestamp DESC",
+}
 
 
 def get_connection():
@@ -29,12 +40,51 @@ def create_table():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Indexes for fast ORDER BY + LIMIT/OFFSET on large datasets.
+    # Without these every query on 1M+ rows does a full scan + in-memory sort.
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fav_ts
+        ON clipboard_items (is_favorite DESC, timestamp DESC)
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ts
+        ON clipboard_items (timestamp DESC)
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tag
+        ON clipboard_items (tag)
+    """)
+
     conn.commit()
     conn.close()
 
 
+def ensure_indexes():
+    """Apply performance indexes to an existing database.
+    Safe to call every startup — uses IF NOT EXISTS so it's a no-op if
+    the indexes are already present.  On a 1M+ row DB the first run will
+    take a few seconds to build the indexes; subsequent starts are instant.
+    """
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_fav_ts
+            ON clipboard_items (is_favorite DESC, timestamp DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ts
+            ON clipboard_items (timestamp DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tag
+            ON clipboard_items (tag)
+        """)
+        conn.commit()
+
+
 def add_item(content, manual_tag=None):
     if not content.strip(): return
+
 
     # --- Enhanced Tag Detection ---
     if manual_tag:
@@ -56,14 +106,16 @@ def add_item(content, manual_tag=None):
 
     conn = get_connection()
     c = conn.cursor()
-    # Optional: Avoid saving the exact same content twice in a row
+    # Optional: Avoid saving the exact same content twice in a row.
+    # Decrypt the stored value before comparing with the incoming plaintext.
     c.execute("SELECT content FROM clipboard_items ORDER BY timestamp DESC LIMIT 1")
     last = c.fetchone()
-    if last and last[0] == content:
+    if last and decrypt(last[0]) == content:
         conn.close()
         return
 
-    c.execute("INSERT INTO clipboard_items (content, tag) VALUES (?, ?)", (content, tag))
+    # Encrypt content before persisting
+    c.execute("INSERT INTO clipboard_items (content, tag) VALUES (?, ?)", (encrypt(content), tag))
     conn.commit()
     conn.close()
 
@@ -86,10 +138,12 @@ def delete_item(item_id):
     conn.commit()
     conn.close()
 
+
 def update_item(item_id, new_content):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE clipboard_items SET content = ? WHERE id = ?", (new_content, item_id))
+    # Encrypt the updated content before saving
+    c.execute("UPDATE clipboard_items SET content = ? WHERE id = ?", (encrypt(new_content), item_id))
     conn.commit()
     conn.close()
 
@@ -116,29 +170,77 @@ def delete_oldest_items(n):
         conn.commit()
 
 
-def get_recent_items(limit=50, search_query=None, filter_type="ALL", mode="main"):
+def _get_date_bounds(date_filter):
+    """
+    Converts a named date_filter key into a (start, end) UTC timestamp string
+    pair suitable for use in SQL: ``AND timestamp >= start AND timestamp < end``.
+
+    Converts the user's local day boundaries to UTC so that morning and evening
+    records clipped on that day match the SQLite UTC timestamps accurately.
+
+    Accepted keys:
+      - "today", "yesterday", "this_week", "this_month"  — named ranges
+      - ("custom", "YYYY-MM-DD")                         — single calendar-picked date
+    Returns None for None / unknown values (= no date filter).
+    """
+    from datetime import datetime, timedelta
+
+    tz_offset = datetime.now() - datetime.utcnow()
+    local_today = datetime.now().date()
+
+    # Calendar-picked single date: filter = ("custom", "YYYY-MM-DD")
+    if isinstance(date_filter, tuple) and len(date_filter) == 2 and date_filter[0] == "custom":
+        try:
+            picked = datetime.strptime(date_filter[1], "%Y-%m-%d").date()
+            local_start = datetime.combine(picked, datetime.min.time())
+            utc_start = local_start - tz_offset
+            utc_end = utc_start + timedelta(days=1)
+            return (utc_start.strftime("%Y-%m-%d %H:%M:%S"), utc_end.strftime("%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            return None
+
+    if date_filter == "today":
+        local_start = datetime.combine(local_today, datetime.min.time())
+        utc_start = local_start - tz_offset
+        utc_end = utc_start + timedelta(days=1)
+    elif date_filter == "yesterday":
+        local_start = datetime.combine(local_today - timedelta(days=1), datetime.min.time())
+        utc_start = local_start - tz_offset
+        utc_end = utc_start + timedelta(days=1)
+    elif date_filter == "this_week":
+        start_date = local_today - timedelta(days=local_today.weekday())
+        local_start = datetime.combine(start_date, datetime.min.time())
+        utc_start = local_start - tz_offset
+        utc_end = local_start + timedelta(days=7) - tz_offset
+    elif date_filter == "this_month":
+        start_date = local_today.replace(day=1)
+        local_start = datetime.combine(start_date, datetime.min.time())
+        utc_start = local_start - tz_offset
+        utc_end = datetime.combine(local_today + timedelta(days=1), datetime.min.time()) - tz_offset
+    else:
+        return None
+    return (utc_start.strftime("%Y-%m-%d %H:%M:%S"), utc_end.strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def get_recent_items(limit=50, offset=0, search_query=None, filter_type="ALL", mode="main", date_filter=None):
     """
     Unified fetcher for the premium dashboard.
     Handles searching, category filtering, and sorting modes.
+
+    Because content is stored encrypted, search checks decrypted text as well
+    as record timestamps (including local formatted dates) and tags.
     """
     conn = get_connection()
     c = conn.cursor()
 
-    # 1. Sorting Logic
-    # Favorites first if in dashboard mode, otherwise strictly by time
-    order_logic = "is_favorite DESC, timestamp DESC" if mode == "dashboard" else "timestamp DESC"
+    # 1. Sorting Logic — use allowlist, never interpolate user-controlled values
+    order_logic = _ALLOWED_ORDER.get(mode, "timestamp DESC")
 
-    # 2. Build Query Dynamically
-    # Using 'WHERE 1=1' allows us to append 'AND' clauses easily
-    query = f"SELECT id, content, tag, is_favorite, timestamp FROM clipboard_items WHERE 1=1"
+    # 2. Build base query.  'WHERE 1=1' lets us append AND clauses cleanly.
+    query = "SELECT id, content, tag, is_favorite, timestamp FROM clipboard_items WHERE 1=1"
     params = []
 
-    # Filter by Search
-    if search_query and search_query.strip():
-        query += " AND content LIKE ?"
-        params.append(f"%{search_query}%")
-
-    # Filter by Category (Matching the UI Chip IDs)
+    # Filter by Category — operates on unencrypted tag / is_favorite columns
     if filter_type == "FAVORITES":
         query += " AND is_favorite = 1"
     elif filter_type == "TEXT":
@@ -152,14 +254,73 @@ def get_recent_items(limit=50, search_query=None, filter_type="ALL", mode="main"
     elif filter_type == "IMAGE":
         query += " AND tag = 'Image'"
 
-    # Finalize Query
-    query += f" ORDER BY {order_logic} LIMIT ?"
-    params.append(limit)
+    # Filter by Date Range — timestamp column is unencrypted, safe for SQL
+    date_bounds = _get_date_bounds(date_filter)
+    if date_bounds:
+        query += " AND timestamp >= ? AND timestamp < ?"
+        params.extend(date_bounds)
 
-    c.execute(query, params)
-    items = c.fetchall()
-    conn.close()
-    return items
+    query += f" ORDER BY {order_logic}"
+
+    if search_query and search_query.strip():
+        # Fetch all category/date-filtered rows; filter on decrypted content & timestamp in Python
+        c.execute(query, params)
+        rows = c.fetchall()
+        conn.close()
+
+        needle = search_query.strip().lower()
+        tz_offset = datetime.now() - datetime.utcnow()
+        matched = []
+        for row in rows:
+            ts_str = str(row[4]) if row[4] else ""
+            tag_str = str(row[2]) if row[2] else ""
+
+            # Check timestamp and tag match
+            ts_match = needle in ts_str.lower()
+            tag_match = needle in tag_str.lower()
+
+            # Check local date format match (e.g. 'sep 19', '19/09', '2026-09-19')
+            date_match = False
+            if not ts_match:
+                try:
+                    dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                    local_dt = dt + tz_offset
+                    date_match = (
+                        needle in local_dt.strftime("%Y-%m-%d").lower() or
+                        needle in local_dt.strftime("%b %d").lower() or
+                        needle in local_dt.strftime("%B %d").lower() or
+                        needle in local_dt.strftime("%d/%m/%Y").lower() or
+                        needle in local_dt.strftime("%d-%m-%Y").lower()
+                    )
+                except Exception:
+                    pass
+
+            # Decrypt content (skip decrypting huge image binaries unless searching image or date matched)
+            decrypted_content = ""
+            content_match = False
+            if tag_str != "Image":
+                decrypted_content = decrypt(row[1])
+                content_match = needle in decrypted_content.lower()
+            elif ts_match or date_match or tag_match or needle in ("image", "img", "photo"):
+                decrypted_content = decrypt(row[1])
+
+            if content_match or ts_match or date_match or tag_match:
+                if not decrypted_content:
+                    decrypted_content = decrypt(row[1])
+                matched.append((row[0], decrypted_content, row[2], row[3], row[4]))
+                if len(matched) >= offset + limit:
+                    break
+
+        # Apply pagination manually
+        return matched[offset: offset + limit]
+    else:
+        # No search query — use efficient DB-level LIMIT / OFFSET
+        query += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        c.execute(query, params)
+        rows = c.fetchall()
+        conn.close()
+        return [(row[0], decrypt(row[1]), row[2], row[3], row[4]) for row in rows]
 
 
 def enforce_database_limits():
@@ -181,8 +342,7 @@ def enforce_database_limits():
         # A. Delete items older than 30 days
         conn.execute("DELETE FROM clipboard_items WHERE timestamp < datetime('now', '-30 days')")
 
-        # B. Delete items exceeding the numerical limit (keeping Favorites)
-        # We use a subquery to find IDs that are NOT in the 'Top N' most recent
+        # B. Delete items exceeding the numerical limit (keeping newest)
         conn.execute("""
             DELETE FROM clipboard_items 
             WHERE id NOT IN (
@@ -208,7 +368,7 @@ def get_time_ago(timestamp_str):
         if seconds < 86400: return f"{seconds // 3600}h ago"
         return f"{diff.days}d ago"
     except Exception as e:
-        print(f"Time error: {e}")
+        logger.error("get_time_ago failed for '%s': %s", timestamp_str, e)
         return "Recent"
 
 
@@ -224,31 +384,44 @@ def get_total_count():
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            # Use the correct table name: clipboard_items
             cursor.execute("SELECT COUNT(*) FROM clipboard_items")
             count = cursor.fetchone()[0]
             return count
     except Exception as e:
-        print(f"Database Count Error: {e}")
+        logger.error("Database Count Error: %s", e)
         return 0
 
-def get_category_counts():
-    """Returns a dict of counts for each category and favorites."""
-    counts = {"ALL": 0, "FAVORITES": 0, "TEXT": 0, "CODE": 0, "URL": 0, "EMAIL": 0, "IMAGE": 0}
+
+def get_category_counts(date_filter=None):
+    """Returns a dict of counts for each category and favorites, optionally scoped to a date range."""
+    counts = {"ALL": 0, "FAVORITES": 0, "TEXT": 0, "CODE": 0, "URL": 0, "EMAIL": 0, "IMAGE": 0, "VAULT": 0}
     try:
+        from utils.vault_storage import get_vault_count
+        counts["VAULT"] = get_vault_count()
+    except Exception:
+        pass
+
+    try:
+        date_bounds = _get_date_bounds(date_filter)
+        date_clause = " AND timestamp >= ? AND timestamp < ?" if date_bounds else ""
+        date_params = list(date_bounds) if date_bounds else []
+
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM clipboard_items")
+            cursor.execute(f"SELECT COUNT(*) FROM clipboard_items WHERE 1=1{date_clause}", date_params)
             counts["ALL"] = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 1")
+
+            cursor.execute(f"SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 1{date_clause}", date_params)
             counts["FAVORITES"] = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT tag, COUNT(*) FROM clipboard_items GROUP BY tag")
+
+            cursor.execute(
+                f"SELECT tag, COUNT(*) FROM clipboard_items WHERE 1=1{date_clause} GROUP BY tag",
+                date_params
+            )
             for row in cursor.fetchall():
                 tag = str(row[0]).upper()
                 if tag in counts:
                     counts[tag] = row[1]
     except Exception as e:
-        print(f"Database Category Count Error: {e}")
+        logger.error("Database Category Count Error: %s", e)
     return counts

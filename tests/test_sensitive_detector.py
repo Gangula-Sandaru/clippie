@@ -1,0 +1,107 @@
+import unittest
+from clipboard.sensitive_detector import detect_sensitive, is_sensitive, luhn_check
+
+# NOTE: All credential-shaped strings below are deliberately synthetic test
+# fixtures. They use placeholder characters (X, 0, fake domains) so that
+# secret scanners do not false-positive on them, while still exercising the
+# regex patterns inside sensitive_detector.
+
+
+class TestSensitiveDetector(unittest.TestCase):
+
+    def test_luhn_check(self):
+        # Valid Luhn numbers (well-known public test card numbers from stripe docs)
+        self.assertTrue(luhn_check("4532015112830366"))
+        self.assertTrue(luhn_check("49927398716"))
+        # Invalid Luhn numbers
+        self.assertFalse(luhn_check("4532015112830367"))
+        self.assertFalse(luhn_check("1234567812345678"))
+
+    def test_credit_card_detection(self):
+        # Valid Visa with spaces (public test number)
+        has_sens, cat = detect_sensitive("My card is 4532 0151 1283 0366 expires 12/28")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "Credit Card Number")
+
+        # Valid Visa with hyphens
+        has_sens, cat = detect_sensitive("Card: 4532-0151-1283-0366")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "Credit Card Number")
+
+        # Raw continuous digits
+        self.assertTrue(is_sensitive("4532015112830366"))
+
+        # Random 16 digits that fail Luhn should NOT be flagged
+        has_sens, cat = detect_sensitive("Reference transaction ID 1111222233334444 completed")
+        self.assertFalse(has_sens)
+
+    def test_password_detection(self):
+        # keyword: value pattern
+        has_sens, cat = detect_sensitive("db_password: XXXXXXXXXXXXXXXX")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "Password / Credential")
+
+        # short key=value pattern
+        has_sens, cat = detect_sensitive("pwd=XXXXXXXX")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "Password / Credential")
+
+        # Database URI with embedded credentials
+        has_sens, cat = detect_sensitive("postgres://user:XXXXXXXXXX@localhost:5432/mydb")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "Password / Credential")
+
+    def test_api_keys_and_tokens(self):
+        # OpenAI-style prefix (sk-proj-) with clearly fake body
+        has_sens, cat = detect_sensitive("sk-proj-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "API Key / Token")
+
+        # GitHub PAT prefix (ghp_) with clearly fake body
+        has_sens, cat = detect_sensitive("ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "API Key / Token")
+
+        # AWS Access Key prefix (AKIA) with clearly fake body
+        has_sens, cat = detect_sensitive("export AWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXX")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "API Key / Token")
+
+        # Generic api_key assignment
+        has_sens, cat = detect_sensitive("api_key = 'XXXXXXXXXXXXXXXXXXXXXXXX'")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "API Key / Token")
+
+    def test_private_key_detection(self):
+        rsa_key = """-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA0Y3wV...
+-----END RSA PRIVATE KEY-----"""
+        has_sens, cat = detect_sensitive(rsa_key)
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "Private Key")
+
+        openssh_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNza..."
+        has_sens, cat = detect_sensitive(openssh_key)
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "Private Key")
+
+    def test_social_security_number(self):
+        has_sens, cat = detect_sensitive("SSN: 123-45-6789")
+        self.assertTrue(has_sens)
+        self.assertEqual(cat, "Social Security Number")
+
+    def test_normal_text_not_flagged(self):
+        normal_samples = [
+            "Hello, this is regular clipboard text.",
+            "https://github.com/user/project",
+            "import os\nimport sys\nprint('Hello World')",
+            "123-456-7890",  # Normal US phone number
+            "Today's meeting is scheduled at 4:30 PM in Room 204.",
+            "Select * from users where id = 10",
+        ]
+        for sample in normal_samples:
+            self.assertFalse(is_sensitive(sample), f"False positive on: {sample}")
+
+
+if __name__ == "__main__":
+    unittest.main()

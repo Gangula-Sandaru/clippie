@@ -1,6 +1,13 @@
 name: Build and Release Clippie
 
 on:
+  # ── Option 1: Push a git tag  (e.g. git tag v1.2 && git push --tags)
+  # This is the recommended pro workflow: tag → CI builds → GitHub Release created automatically.
+  push:
+    tags:
+      - "v*"   # matches v1.0, v1.2.3, etc.
+
+  # ── Option 2: Manual trigger from the GitHub Actions UI
   workflow_dispatch:
     inputs:
       version:
@@ -87,11 +94,23 @@ jobs:
           path: ./downloads
           merge-multiple: true
 
+      - name: Resolve release tag
+        id: tag
+        run: |
+          # When triggered by push: use the git tag (e.g. v1.2)
+          # When triggered manually: use the workflow_dispatch input
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "value=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "value=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: Release ${{ github.event.inputs.version }}
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: Release ${{ steps.tag.outputs.value }}
+          generate_release_notes: true   # auto-generates changelog from commits
           files: |
             ./downloads/clippie-setup.exe
             ./downloads/clippie-linux

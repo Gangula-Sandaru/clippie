@@ -1,13 +1,28 @@
 import pyperclip
 from PyQt5.QtWidgets import (QFrame, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QWidget, QScrollArea, QLineEdit,
-                             QGraphicsDropShadowEffect)
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRect
-from PyQt5.QtGui import QFont, QColor, QCursor
+                             QGraphicsDropShadowEffect, QCalendarWidget, QDialog)
+from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QDate, QEvent
+from PyQt5.QtGui import QFont, QColor, QCursor, QPalette
 from themes.theme_manager import theme_engine
 from ui.dashboard_card import ClipboardCard
 from db.database import get_time_ago, get_recent_items, get_total_count
 from ui.help_window import HelpWindow
+
+
+class CalendarPopup(QDialog):
+    """
+    Floating dark-themed calendar popup that automatically closes
+    when clicking outside or when focus is lost.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.ActivationChange and not self.isActiveWindow():
+            self.reject()
+        super().changeEvent(event)
 
 
 class HistoryWindow(QWidget):
@@ -33,6 +48,11 @@ class HistoryWindow(QWidget):
         self._margin = 10  # Slightly larger hit-box for easier grabbing
         self.current_filter = "ALL"
         self.settings_window = None
+        self.current_offset = 0
+        self.is_loading = False
+        self.has_more = True
+        self._user_at_bottom = False  # True while user is pinned to the bottom
+        self.current_date_filter = None  # Date filter key: "today", "yesterday", "this_week", "this_month", or None
 
         # 3. MAIN LAYOUT
         self.main_layout = QVBoxLayout(self)
@@ -73,6 +93,7 @@ class HistoryWindow(QWidget):
         # Filters
         self.filter_buttons = {}
         self.base_filters = [("ALL", "ALL", "All Clips"), ("★", "FAVORITES", "Favorites"),
+                   ("🔒", "VAULT", "Secure Vault"),
                    ("TXT", "TEXT", "Plain Text"), ("</>", "CODE", "Source Code"),
                    ("🔗", "URL", "Web Links"), ("@ ", "EMAIL", "Emails"),
                    ("🖼", "IMAGE", "Images")]
@@ -147,16 +168,96 @@ class HistoryWindow(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search your clipboard history...")
         self.search.setObjectName("ModernSearch")
-        self.search.textChanged.connect(self.refresh_items)
+        
+        # Debounce timer for smooth search without freezing on large datasets
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(250)
+        self.search_timer.timeout.connect(self.refresh_items)
+        self.search.textChanged.connect(self.search_timer.start)
+        
         top_layout.addWidget(self.search)
         work_layout.addWidget(self.top_bar)
 
-        # Content
+        # Content — Section Header Bar (sticky, above scroll)
+        self.section_header = QFrame()
+        self.section_header.setObjectName("SectionHeader")
+        self.section_header.setFixedHeight(52)
+        sh_layout = QHBoxLayout(self.section_header)
+        sh_layout.setContentsMargins(50, 0, 50, 0)
+
+        self.section_title_lbl = QLabel("All Records")
+        self.section_title_lbl.setObjectName("SectionTitle")
+
+        self.section_count_lbl = QLabel("")
+        self.section_count_lbl.setObjectName("SectionCount")
+
+        self.btn_lock_vault = QPushButton("🔒 Lock Vault")
+        self.btn_lock_vault.setObjectName("DateFilterBtn")
+        self.btn_lock_vault.setFixedHeight(30)
+        self.btn_lock_vault.setCursor(Qt.PointingHandCursor)
+        self.btn_lock_vault.clicked.connect(self.lock_and_exit_vault)
+        self.btn_lock_vault.hide()
+
+        sh_layout.addWidget(self.section_title_lbl)
+        sh_layout.addStretch()
+        sh_layout.addWidget(self.btn_lock_vault)
+        sh_layout.addWidget(self.section_count_lbl)
+        work_layout.addWidget(self.section_header)
+
+        # Date Filter Row — quick-filter buttons just below the section header
+        self.date_filter_bar = QFrame()
+        self.date_filter_bar.setObjectName("DateFilterBar")
+        self.date_filter_bar.setFixedHeight(48)
+        df_layout = QHBoxLayout(self.date_filter_bar)
+        df_layout.setContentsMargins(50, 0, 50, 0)
+        df_layout.setSpacing(10)
+
+        self.date_filter_buttons = {}
+        date_options = [
+            (None,         "All Time"),
+            ("today",      "Today"),
+            ("yesterday",  "Yesterday"),
+            ("this_week",  "This Week"),
+            ("this_month", "This Month"),
+        ]
+        for key, label in date_options:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setObjectName("DateFilterBtn")
+            btn.clicked.connect(lambda checked, k=key: self.set_date_filter(k))
+            df_layout.addWidget(btn)
+            self.date_filter_buttons[key] = btn
+
+        # "All Time" is selected by default
+        self.date_filter_buttons[None].setChecked(True)
+
+        # Separator
+        sep = QFrame()
+        sep.setObjectName("DateFilterSep")
+        sep.setFixedSize(1, 22)
+        df_layout.addWidget(sep)
+
+        # Calendar pick button
+        self.btn_pick_date = QPushButton("📅  Pick Date")
+        self.btn_pick_date.setCheckable(True)
+        self.btn_pick_date.setCursor(Qt.PointingHandCursor)
+        self.btn_pick_date.setObjectName("DateFilterBtn")
+        self.btn_pick_date.clicked.connect(lambda _checked: self.show_calendar_picker())
+        df_layout.addWidget(self.btn_pick_date)
+
+        df_layout.addStretch()
+        work_layout.addWidget(self.date_filter_bar)
+
+        # Content — Scroll Area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setObjectName("ContentScroll")
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.verticalScrollBar().valueChanged.connect(self.on_scroll)
+        self.scroll.verticalScrollBar().rangeChanged.connect(lambda min_val, max_val: self.check_scroll_fill())
 
         self.container = QWidget()
         self.container.setObjectName("ScrollContainer")
@@ -164,6 +265,23 @@ class HistoryWindow(QWidget):
         self.cards_layout.setContentsMargins(50, 0, 50, 50)
         self.cards_layout.setSpacing(20)
         self.cards_layout.setAlignment(Qt.AlignTop)
+
+        # Loading indicator (shown at bottom inside scroll container)
+        self.loading_lbl = QLabel("⟳  Loading more…", self.container)
+        self.loading_lbl.setObjectName("LoadingLabel")
+        self.loading_lbl.setAlignment(Qt.AlignCenter)
+        self.loading_lbl.setFixedHeight(48)
+        self.loading_lbl.hide()
+
+        # End-of-records footer
+        self.end_lbl = QLabel("✦  All records loaded", self.container)
+        self.end_lbl.setObjectName("EndLabel")
+        self.end_lbl.setAlignment(Qt.AlignCenter)
+        self.end_lbl.setFixedHeight(48)
+        self.end_lbl.hide()
+
+        self.cards_layout.addWidget(self.loading_lbl)
+        self.cards_layout.addWidget(self.end_lbl)
 
         self.scroll.setWidget(self.container)
         work_layout.addWidget(self.scroll)
@@ -309,50 +427,366 @@ class HistoryWindow(QWidget):
             self.btn_max.setText("❐")
         self.apply_theme(theme_engine.current_palette)
 
+    def lock_and_exit_vault(self):
+        from utils.vault_storage import lock_vault
+        lock_vault()
+        self.set_filter("ALL")
+
+    def hideEvent(self, event):
+        from utils.vault_storage import lock_vault
+        lock_vault()
+        super().hideEvent(event)
+
     def set_filter(self, filter_name):
+        if filter_name == "VAULT":
+            from utils.vault_storage import is_vault_password_set, is_vault_unlocked
+            if not is_vault_unlocked():
+                from ui.dialog_window import VaultPasswordDialog
+                mode = "ENTER_PASSWORD" if is_vault_password_set() else "SET_PASSWORD"
+                p = theme_engine.current_palette
+                dlg = VaultPasswordDialog(mode=mode, p=p, parent=self)
+                geo = self.geometry()
+                dlg.move(
+                    geo.center().x() - dlg.width() // 2,
+                    geo.center().y() - dlg.height() // 2
+                )
+                if not dlg.exec_():
+                    # Revert button selection to current active filter
+                    for name, btn in self.filter_buttons.items():
+                        btn.setChecked(name == self.current_filter)
+                    return
+
         self.current_filter = filter_name
         for name, btn in self.filter_buttons.items():
             btn.setChecked(name == filter_name)
+
+        if hasattr(self, 'btn_lock_vault'):
+            if filter_name == "VAULT":
+                self.btn_lock_vault.show()
+            else:
+                self.btn_lock_vault.hide()
+
         self.refresh_items()
+
+    def set_date_filter(self, date_key):
+        """Called when a date quick-filter button is clicked (None = All Time)."""
+        self.current_date_filter = date_key
+        for key, btn in self.date_filter_buttons.items():
+            btn.setChecked(key == date_key)
+        # Uncheck / reset Pick Date button when a quick preset is chosen
+        self.btn_pick_date.setChecked(False)
+        self.btn_pick_date.setText("📅  Pick Date")
+        self.refresh_items()
+
+    def show_calendar_picker(self):
+        """Opens a dark-themed calendar popup; applies the picked date as a custom filter."""
+        p = theme_engine.current_palette
+
+        dlg = CalendarPopup(self)
+        dlg.setFixedSize(340, 360)
+
+        outer = QFrame(dlg)
+        outer.setObjectName("CalPickerShell")
+        outer.setGeometry(0, 0, 340, 360)
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(14, 12, 14, 14)
+        outer_layout.setSpacing(10)
+
+        # ── Title row ──────────────────────────────────────
+        title_row = QHBoxLayout()
+        title_lbl = QLabel("Pick a Date", outer)
+        title_lbl.setObjectName("CalPickerTitle")
+        close_btn = QPushButton("✕", outer)
+        close_btn.setObjectName("CalPickerClose")
+        close_btn.setFixedSize(26, 26)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(dlg.reject)
+        title_row.addWidget(title_lbl)
+        title_row.addStretch()
+        title_row.addWidget(close_btn)
+        outer_layout.addLayout(title_row)
+
+        # ── Calendar ───────────────────────────────────────
+        cal = QCalendarWidget(outer)
+        cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        cal.setGridVisible(False)
+        cal.setNavigationBarVisible(True)
+        cal.setSelectedDate(QDate.currentDate())
+        # Clicking any date directly accepts and closes
+        cal.clicked.connect(lambda _d: dlg.accept())
+        outer_layout.addWidget(cal)
+
+        # ── Confirm button ─────────────────────────────────
+        confirm_btn = QPushButton("Apply Date", outer)
+        confirm_btn.setObjectName("CalPickerConfirm")
+        confirm_btn.setCursor(Qt.PointingHandCursor)
+        confirm_btn.setFixedHeight(36)
+        confirm_btn.clicked.connect(dlg.accept)
+        outer_layout.addWidget(confirm_btn)
+
+        # ── Force dark palette on internal Qt calendar widgets ─
+        cal_pal = cal.palette()
+        c_bg = QColor(p.get("card_bg", "#16161e"))
+        c_fg = QColor(p.get("text_main", "#ffffff"))
+        c_dim = QColor(p.get("text_dim", "#565f89"))
+        c_acc = QColor(p.get("accent", "#7aa2f7"))
+        c_btn = QColor(p.get("widget_bg", "#1f2335"))
+        cal_pal.setColor(QPalette.Window, c_bg)
+        cal_pal.setColor(QPalette.WindowText, c_fg)
+        cal_pal.setColor(QPalette.Base, c_bg)
+        cal_pal.setColor(QPalette.AlternateBase, c_bg)
+        cal_pal.setColor(QPalette.Text, c_fg)
+        cal_pal.setColor(QPalette.Button, c_btn)
+        cal_pal.setColor(QPalette.ButtonText, c_fg)
+        cal_pal.setColor(QPalette.Highlight, c_acc)
+        cal_pal.setColor(QPalette.HighlightedText, QColor("#000000"))
+        cal.setPalette(cal_pal)
+
+        # ── Stylesheet ─────────────────────────────────────
+        dlg.setStyleSheet(f"""
+            QDialog {{
+                background-color: {p['card_bg']};
+                border: 1px solid {p['card_border']};
+                border-radius: 12px;
+            }}
+            #CalPickerShell {{
+                background-color: {p['card_bg']};
+                border: 1px solid {p['card_border']};
+                border-radius: 12px;
+            }}
+            #CalPickerTitle {{
+                color: {p['text_main']};
+                font-size: 14px;
+                font-weight: 700;
+            }}
+            #CalPickerClose {{
+                background: transparent;
+                color: {p['text_dim']};
+                border: 1px solid {p['card_border']};
+                font-size: 12px;
+                border-radius: 13px;
+                font-weight: 700;
+            }}
+            #CalPickerClose:hover {{ background: #f7768e; color: white; border-color: #f7768e; }}
+
+            /* Full Dark Theme Calendar */
+            QCalendarWidget {{
+                background-color: {p['card_bg']};
+            }}
+            QCalendarWidget QWidget#qt_calendar_navigationbar {{
+                background-color: {p['widget_bg']};
+                border-radius: 8px;
+                min-height: 36px;
+            }}
+            QCalendarWidget QToolButton {{
+                color: {p['text_main']};
+                background-color: transparent;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+                margin: 2px 4px;
+                padding: 4px 8px;
+            }}
+            QCalendarWidget QToolButton:hover {{
+                background-color: {p['card_border']};
+                color: {p['accent']};
+            }}
+            QCalendarWidget QToolButton:pressed {{
+                background-color: {p['accent']};
+                color: {p['main_bg']};
+            }}
+            QCalendarWidget QMenu {{
+                background-color: {p['card_bg']};
+                color: {p['text_main']};
+                border: 1px solid {p['card_border']};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QCalendarWidget QMenu::item:selected {{
+                background-color: {p['accent']};
+                color: {p['main_bg']};
+                border-radius: 4px;
+            }}
+            QCalendarWidget QSpinBox {{
+                background-color: {p['widget_bg']};
+                color: {p['text_main']};
+                border: 1px solid {p['card_border']};
+                border-radius: 6px;
+                padding: 2px 6px;
+                selection-background-color: {p['accent']};
+                selection-color: {p['main_bg']};
+            }}
+            QCalendarWidget QTableView {{
+                background-color: {p['card_bg']};
+                alternate-background-color: {p['card_bg']};
+                selection-background-color: {p['accent']};
+                selection-color: {p['main_bg']};
+                color: {p['text_main']};
+                border: none;
+                outline: 0;
+            }}
+            QCalendarWidget QHeaderView {{
+                background-color: {p['card_bg']};
+            }}
+            QCalendarWidget QHeaderView::section {{
+                background-color: {p['card_bg']};
+                color: {p['text_dim']};
+                border: none;
+                font-weight: 700;
+                font-size: 11px;
+                padding: 4px 0px;
+            }}
+            QCalendarWidget QAbstractItemView:enabled {{
+                color: {p['text_main']};
+                selection-background-color: {p['accent']};
+                selection-color: {p['main_bg']};
+            }}
+            QCalendarWidget QAbstractItemView:disabled {{
+                color: {p['text_dim']};
+            }}
+
+            #CalPickerConfirm {{
+                background-color: {p['accent']};
+                color: {p['main_bg']};
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 700;
+            }}
+            #CalPickerConfirm:hover {{
+                background-color: {p['accent']};
+                opacity: 0.85;
+            }}
+        """)
+
+        # ── Position below the button ──────────────────────
+        btn_global = self.btn_pick_date.mapToGlobal(QPoint(0, self.btn_pick_date.height() + 4))
+        from PyQt5.QtWidgets import QApplication as _App
+        screen_rect = _App.primaryScreen().availableGeometry()
+        x = min(btn_global.x(), screen_rect.right() - 345)
+        y = min(btn_global.y(), screen_rect.bottom() - 365)
+        dlg.move(x, y)
+
+        # ── Show ──────────────────────────────────────────
+        if dlg.exec_() == QDialog.Accepted:
+            q_date = cal.selectedDate()
+            date_str = q_date.toString("yyyy-MM-dd")
+            friendly = q_date.toString("MMM d, yyyy")
+            self.current_date_filter = ("custom", date_str)
+            for key, btn in self.date_filter_buttons.items():
+                btn.setChecked(False)
+            self.btn_pick_date.setChecked(True)
+            self.btn_pick_date.setText(f"📅  {friendly}")
+            self.refresh_items()
+        else:
+            is_custom = isinstance(self.current_date_filter, tuple)
+            self.btn_pick_date.setChecked(is_custom)
+
+
+
+    def _is_near_bottom(self):
+        """True when the user is within trigger range of the bottom."""
+        scrollbar = self.scroll.verticalScrollBar()
+        max_val = scrollbar.maximum()
+        value = scrollbar.value()
+        if max_val <= 0:
+            return False
+        # Generous threshold: 2x viewport height or 800px so loading is continuous & seamless
+        threshold = max(800, self.scroll.viewport().height() * 2)
+        return value >= max_val - threshold
+
+    def on_scroll(self, value):
+        if self.is_loading or not self.has_more:
+            return
+        if self._is_near_bottom():
+            self.load_more_items()
+
+    def check_scroll_fill(self):
+        """Keep loading until content fills or exceeds the viewport."""
+        if not self.has_more or self.is_loading:
+            return
+        scrollbar = self.scroll.verticalScrollBar()
+        if scrollbar.maximum() == 0 or self._is_near_bottom():
+            self.load_more_items()
 
     def refresh_items(self):
         """
         Clears the current view and repopulates cards from the database.
         Called on filter change, search change, or card action (star/delete).
         """
+        self.current_offset = 0
+        self.has_more = True
+        self.is_loading = True
+
         from db.database import get_category_counts
-        counts = get_category_counts()
+        counts = get_category_counts(date_filter=self.current_date_filter)
         for icon, f_id, f_name in getattr(self, 'base_filters', []):
             if f_id in self.filter_buttons:
                 self.filter_buttons[f_id].setText(f"{icon}   {f_name} ({counts.get(f_id, 0)})")
 
-        # 1. Clear existing cards safely
+        # Update section header title and count
+        filter_labels = {
+            "ALL": "All Records", "FAVORITES": "Favorites",
+            "VAULT": "Secure Vault",
+            "TEXT": "Plain Text", "CODE": "Source Code",
+            "URL": "Web Links", "EMAIL": "Emails", "IMAGE": "Images",
+        }
+        title = filter_labels.get(self.current_filter, "All Records")
+        total = counts.get(self.current_filter, 0)
+        self.section_title_lbl.setText(title)
+        self.section_count_lbl.setText(f"{total:,} items" if total else "")
+
+        # 1. Clear existing items safely, keep loading_lbl and end_lbl
         while self.cards_layout.count():
             item = self.cards_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+            w = item.widget()
+            if w:
+                if w not in (self.loading_lbl, self.end_lbl):
+                    w.deleteLater()
 
-        # 2. Fetch fresh items from DB
+        # Hide footer labels
+        self.loading_lbl.hide()
+        self.end_lbl.hide()
+
+        # 2. Fetch fresh items from DB or Separate Vault File
         search_term = self.search.text()
-        items = get_recent_items(
-            limit=40,
-            search_query=search_term,
-            filter_type=self.current_filter,
-            mode="dashboard"  # Keeps favorites at top
-        )
+        limit = 50
+        is_vault = (self.current_filter == "VAULT")
+
+        if is_vault:
+            from utils.vault_storage import get_vault_items
+            vault_items = get_vault_items(search_term)
+            items = [
+                (v['id'], v['content'], v.get('category', 'Secure Vault'), 0, v['timestamp'], v.get('masked'))
+                for v in vault_items
+            ]
+            items = items[self.current_offset: self.current_offset + limit]
+        else:
+            items = get_recent_items(
+                limit=limit,
+                offset=self.current_offset,
+                search_query=search_term,
+                filter_type=self.current_filter,
+                mode="dashboard",  # Keeps favorites at top
+                date_filter=self.current_date_filter,
+            )
 
         p = theme_engine.current_palette
 
         # 3. Create and add cards
         if not items:
-            no_data = QLabel("No clipboard items found...")
+            msg = "Secure Vault is empty. Sensitive clips are automatically saved here." if is_vault else "No clipboard items found..."
+            no_data = QLabel(msg)
             no_data.setStyleSheet(f"color: {p['text_dim']}; font-size: 18px; margin-top: 50px;")
             no_data.setAlignment(Qt.AlignCenter)
             self.cards_layout.addWidget(no_data)
+            self.has_more = False
+            self.section_count_lbl.setText("0 items")
         else:
             for idx, i in enumerate(items):
-                # i[0]=id, i[1]=content, i[2]=tag, i[3]=is_fav, i[4]=timestamp
+                # i[0]=id, i[1]=content, i[2]=tag, i[3]=is_fav, i[4]=timestamp, i[5]=masked
+                masked_val = i[5] if is_vault and len(i) > 5 else None
                 card = ClipboardCard(
                     item_id=i[0],
                     category=i[2],
@@ -361,12 +795,114 @@ class HistoryWindow(QWidget):
                     content=i[1],
                     parent=self,  # Crucial for auto-refresh
                     p=p,
-                    delay_ms=idx * 40
+                    delay_ms=0,
+                    is_vault=is_vault,
+                    masked=masked_val
                 )
                 self.cards_layout.addWidget(card)
+            
+            self.current_offset += len(items)
+            if len(items) < limit:
+                self.has_more = False
 
-        # 4. Add a stretch at the end to keep cards aligned to top
+        # Re-append footers and stretch at the bottom
+        self.cards_layout.addWidget(self.loading_lbl)
+        self.cards_layout.addWidget(self.end_lbl)
         self.cards_layout.addStretch()
+        self.is_loading = False
+
+        # Show end label immediately if all records fit in first batch
+        if not self.has_more and items:
+            self.end_lbl.show()
+
+        # Trigger check in case the first batch doesn't fill the screen
+        QTimer.singleShot(100, self.check_scroll_fill)
+
+
+    def load_more_items(self):
+        if self.is_loading or not self.has_more:
+            return
+            
+        self.is_loading = True
+        self.loading_lbl.show()
+        self.end_lbl.hide()
+        
+        search_term = self.search.text()
+        limit = 50
+        is_vault = (self.current_filter == "VAULT")
+
+        if is_vault:
+            from utils.vault_storage import get_vault_items
+            vault_items = get_vault_items(search_term)
+            items = [
+                (v['id'], v['content'], v.get('category', 'Secure Vault'), 0, v['timestamp'], v.get('masked'))
+                for v in vault_items
+            ]
+            items = items[self.current_offset: self.current_offset + limit]
+        else:
+            items = get_recent_items(
+                limit=limit,
+                offset=self.current_offset,
+                search_query=search_term,
+                filter_type=self.current_filter,
+                mode="dashboard",
+                date_filter=self.current_date_filter,
+            )
+        
+        if not items:
+            self.has_more = False
+            self.is_loading = False
+            self.loading_lbl.hide()
+            self.end_lbl.show()
+            return
+            
+        # Temporarily remove stretch and footer widgets to append cards in proper sequence
+        if self.cards_layout.count() > 0:
+            last_item = self.cards_layout.itemAt(self.cards_layout.count() - 1)
+            if last_item and last_item.spacerItem():
+                self.cards_layout.removeItem(last_item)
+        
+        self.cards_layout.removeWidget(self.loading_lbl)
+        self.cards_layout.removeWidget(self.end_lbl)
+                
+        p = theme_engine.current_palette
+        
+        for idx, i in enumerate(items):
+            masked_val = i[5] if is_vault and len(i) > 5 else None
+            card = ClipboardCard(
+                item_id=i[0],
+                category=i[2],
+                is_fav=i[3],
+                time_ago=get_time_ago(i[4]),
+                content=i[1],
+                parent=self,
+                p=p,
+                delay_ms=0,
+                is_vault=is_vault,
+                masked=masked_val
+            )
+            self.cards_layout.addWidget(card)
+            
+        self.current_offset += len(items)
+        if len(items) < limit:
+            self.has_more = False
+            
+        self.cards_layout.addWidget(self.loading_lbl)
+        self.cards_layout.addWidget(self.end_lbl)
+        self.cards_layout.addStretch()
+        self.is_loading = False
+        self.loading_lbl.hide()
+
+        if not self.has_more:
+            self.end_lbl.show()
+        else:
+            # Check if still near bottom to seamlessly chain more chunks
+            QTimer.singleShot(100, self._post_load_check)
+
+    def _post_load_check(self):
+        """Called shortly after a chunk loads to keep filling if needed."""
+        if self.has_more and not self.is_loading and self._is_near_bottom():
+            self.load_more_items()
 
     def apply_theme(self, p):
         radius = 0 if self.isMaximized() else 15
@@ -419,7 +955,40 @@ class HistoryWindow(QWidget):
                 color: {p['text_dim']};
             }}
 
+            /* --- SECTION HEADER --- */
+            #SectionHeader {{ background: transparent; border-bottom: 1px solid {p['card_border']}; }}
+            #SectionTitle {{ color: {p['text_main']}; font-size: 18px; font-weight: 700; }}
+            #SectionCount {{ color: {p['text_dim']}; font-size: 13px; font-weight: 500; background: {p['widget_bg']}; border: 1px solid {p['card_border']}; border-radius: 10px; padding: 2px 12px; }}
+
+            /* --- DATE FILTER BAR --- */
+            #DateFilterBar {{ background: transparent; border-bottom: 1px solid {p['card_border']}; }}
+            #DateFilterSep {{ background: {p['card_border']}; }}
+            #DateFilterBtn {{
+                background: transparent;
+                color: {p['text_dim']};
+                border: 1px solid {p['card_border']};
+                border-radius: 14px;
+                padding: 4px 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            #DateFilterBtn:hover {{
+                background: {p['widget_bg']};
+                color: {p['text_main']};
+                border: 1px solid {p['accent']};
+            }}
+            #DateFilterBtn:checked {{
+                background: {p['accent']};
+                color: {p['main_bg']};
+                border: 1px solid {p['accent']};
+            }}
+
+            /* --- INFINITE SCROLL FOOTER LABELS --- */
+            #LoadingLabel {{ color: {p['accent']}; font-size: 14px; font-weight: 600; background: transparent; }}
+            #EndLabel {{ color: {p['text_dim']}; font-size: 13px; background: transparent; }}
+
             #ContentScroll, #ScrollContainer {{ background: transparent; }}
+
 
             /* --- CLEAN SCROLLBAR (No white lines) --- */
             #ContentScroll QScrollBar:vertical {{ 
